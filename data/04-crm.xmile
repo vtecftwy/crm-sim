@@ -1,0 +1,347 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<xmile version="1.0" xmlns="http://docs.oasis-open.org/xmile/ns/XMILE/v1.0">
+	<header>
+		<product version="1.0" lang="en">Vensim</product>
+		<vendor>Ventana Systems, Inc.</vendor>
+		<created>
+		</created>
+		<modified>
+		</modified>
+		<name>
+		</name>
+		<caption>
+		</caption>
+	</header>
+	<sim_specs method="RK4" time_units="Month">
+		<start>0</start>
+		<stop>100</stop>
+		<dt>1</dt>
+	</sim_specs>
+	<model>
+		<variables>
+			<stock name="active">
+				<units></units>
+				<doc></doc>
+					<eqn>
+					0
+					</eqn>
+					<inflow>
+					satisfied
+					</inflow>
+					<outflow>
+					completed
+					</outflow>
+			</stock>
+			<stock name="bidded">
+				<units></units>
+				<doc></doc>
+					<eqn>
+					0
+					</eqn>
+					<inflow>
+					bids
+					</inflow>
+					<outflow>
+					contracts
+					</outflow>
+					<outflow>
+					lost bids
+					</outflow>
+			</stock>
+			<stock name="mql">
+				<units>Co</units>
+				<doc></doc>
+					<eqn>
+					400
+					</eqn>
+					<inflow>
+					new mql
+					</inflow>
+					<outflow>
+					mql decay
+					</outflow>
+					<outflow>
+					sales qualified
+					</outflow>
+			</stock>
+			<stock name="pitched">
+				<units></units>
+				<doc></doc>
+					<eqn>
+					0
+					</eqn>
+					<inflow>
+					presentations
+					</inflow>
+					<outflow>
+					bids
+					</outflow>
+					<outflow>
+					stale prospects
+					</outflow>
+			</stock>
+			<stock name="prospects">
+				<units></units>
+				<doc></doc>
+					<eqn>
+					0
+					</eqn>
+					<inflow>
+					new prospects
+					</inflow>
+					<outflow>
+					presentations
+					</outflow>
+					<outflow>
+					prospect decay
+					</outflow>
+			</stock>
+			<stock name="signed">
+				<units></units>
+				<doc></doc>
+					<eqn>
+					0
+					</eqn>
+					<inflow>
+					contracts
+					</inflow>
+					<outflow>
+					satisfied
+					</outflow>
+					<outflow>
+					unsatisfied
+					</outflow>
+			</stock>
+			<stock name="sql">
+				<units>Co</units>
+				<doc></doc>
+					<eqn>
+					0
+					</eqn>
+					<inflow>
+					completed
+					</inflow>
+					<inflow>
+					lost bids
+					</inflow>
+					<inflow>
+					sales qualified
+					</inflow>
+					<inflow>
+					stale prospects
+					</inflow>
+					<outflow>
+					new prospects
+					</outflow>
+					<outflow>
+					sql decay
+					</outflow>
+			</stock>
+			<stock name="stale">
+				<units></units>
+				<doc></doc>
+					<eqn>
+					0
+					</eqn>
+					<inflow>
+					unsatisfied
+					</inflow>
+			</stock>
+			<aux name="bids">
+				<units></units>
+				<doc></doc>
+					<eqn>INTEGER ( pitched * prez2bid)					</eqn>
+			</aux>
+			<aux name="completed">
+				<units></units>
+				<doc></doc>
+					<eqn>INTEGER ( 0.9 * active )					</eqn>
+			</aux>
+			<aux name="contracts">
+				<units></units>
+				<doc></doc>
+					<eqn>INTEGER ( bidded * bid2close)					</eqn>
+			</aux>
+			<aux name="lost_bids">
+				<units></units>
+				<doc></doc>
+					<eqn>INTEGER ( bidded * bid2close)					</eqn>
+			</aux>
+			<aux name="mql_decay">
+				<units>Co</units>
+				<doc></doc>
+					<eqn>INTEGER ( mql*decay_rate)					</eqn>
+			</aux>
+			<aux name="mql_industry_events">
+				<units>Co</units>
+				<doc></doc>
+					<eqn>INTEGER ( rawleads_industry_events * rawlead2mql_industry_event )					</eqn>
+			</aux>
+			<aux name="mql_online_campaign">
+				<units>Co</units>
+				<doc></doc>
+					<eqn>INTEGER (rawleads_online_campaign * rawlead2mql_online_campaign)					</eqn>
+			</aux>
+			<aux name="mql_salesreps">
+				<units>Co</units>
+				<doc></doc>
+					<eqn>INTEGER (rawleads_salesreps * salesrep_leads2mql)					</eqn>
+			</aux>
+			<aux name="mql_website">
+				<units>Co</units>
+				<doc></doc>
+					<eqn>INTEGER ( raw_leads_from_website * rawlead2mql_website)					</eqn>
+			</aux>
+			<aux name="new_mql">
+				<units>Co</units>
+				<doc></doc>
+					<eqn>INTEGER ( mql_website + mql_online_campaign + mql_industry_events + mql_salesreps)					</eqn>
+			</aux>
+			<aux name="new_prospects">
+				<units></units>
+				<doc></doc>
+					<eqn>INTEGER ( sql * sql2prospect)					</eqn>
+			</aux>
+			<aux name="presentations">
+				<units></units>
+				<doc></doc>
+					<eqn>INTEGER ( prospects * prospect2prez)					</eqn>
+			</aux>
+			<aux name="prospect_decay">
+				<units></units>
+				<doc></doc>
+					<eqn>INTEGER ( prospects*decay_rate)					</eqn>
+			</aux>
+			<aux name="raw_leads_from_website">
+				<units>Co</units>
+				<doc></doc>
+					<eqn>INTEGER ( website_cta_rate * nb_mthly_website_visitor)					</eqn>
+			</aux>
+			<aux name="rawleads_industry_events">
+				<units>Co</units>
+				<doc></doc>
+					<eqn>80 * nb_industry_events					</eqn>
+			</aux>
+			<aux name="rawleads_online_campaign">
+				<units>Co</units>
+				<doc></doc>
+					<eqn>INTEGER ( online_campaigns_clickthru * online_campaigns_targets)					</eqn>
+			</aux>
+			<aux name="sales_qualified">
+				<units>Co</units>
+				<doc></doc>
+					<eqn>INTEGER ( mql * mql2sql + sql_salesreps)					</eqn>
+			</aux>
+			<aux name="satisfied">
+				<units></units>
+				<doc></doc>
+					<eqn>INTEGER ( signed * customer_satisfaction_rate)					</eqn>
+			</aux>
+			<aux name="sql_decay">
+				<units>Co</units>
+				<doc></doc>
+					<eqn>INTEGER ( sql*decay_rate)					</eqn>
+			</aux>
+			<aux name="sql_salesreps">
+				<units>Co</units>
+				<doc></doc>
+					<eqn>rawleads_salesreps * (1-salesrep_leads2mql)					</eqn>
+			</aux>
+			<aux name="stale_prospects">
+				<units></units>
+				<doc></doc>
+					<eqn>pitched * (1-prez2bid)					</eqn>
+			</aux>
+			<aux name="unsatisfied">
+				<units></units>
+				<doc></doc>
+					<eqn>INTEGER ( signed*(1-customer_satisfaction_rate))					</eqn>
+			</aux>
+			<aux name="bid2close">
+				<units></units>
+				<doc></doc>
+					<eqn>0.3					</eqn>
+			</aux>
+			<aux name="customer_satisfaction_rate">
+				<units></units>
+				<doc></doc>
+					<eqn>0.98					</eqn>
+			</aux>
+			<aux name="decay_rate">
+				<units></units>
+				<doc></doc>
+					<eqn>0.1					</eqn>
+			</aux>
+			<aux name="mql2sql">
+				<units></units>
+				<doc></doc>
+					<eqn>0.15					</eqn>
+			</aux>
+			<aux name="nb_industry_events">
+				<units></units>
+				<doc></doc>
+					<eqn>1					</eqn>
+			</aux>
+			<aux name="nb_mthly_website_visitor">
+				<units></units>
+				<doc></doc>
+					<eqn>2900					</eqn>
+			</aux>
+			<aux name="online_campaigns_clickthru">
+				<units></units>
+				<doc></doc>
+					<eqn>0.1					</eqn>
+			</aux>
+			<aux name="online_campaigns_targets">
+				<units>Co</units>
+				<doc></doc>
+					<eqn>1000					</eqn>
+			</aux>
+			<aux name="prez2bid">
+				<units></units>
+				<doc></doc>
+					<eqn>0.6					</eqn>
+			</aux>
+			<aux name="prospect2prez">
+				<units></units>
+				<doc></doc>
+					<eqn>0.7					</eqn>
+			</aux>
+			<aux name="rawlead2mql_industry_event">
+				<units></units>
+				<doc></doc>
+					<eqn>0.3					</eqn>
+			</aux>
+			<aux name="rawlead2mql_online_campaign">
+				<units></units>
+				<doc></doc>
+					<eqn>0.38					</eqn>
+			</aux>
+			<aux name="rawlead2mql_website">
+				<units></units>
+				<doc></doc>
+					<eqn>0.41					</eqn>
+			</aux>
+			<aux name="rawleads_salesreps">
+				<units>Co</units>
+				<doc></doc>
+					<eqn>30					</eqn>
+			</aux>
+			<aux name="salesrep_leads2mql">
+				<units></units>
+				<doc></doc>
+					<eqn>0.02					</eqn>
+			</aux>
+			<aux name="sql2prospect">
+				<units></units>
+				<doc></doc>
+					<eqn>0.7					</eqn>
+			</aux>
+			<aux name="website_cta_rate">
+				<units></units>
+				<doc></doc>
+					<eqn>0.03					</eqn>
+			</aux>
+		</variables>
+	</model>
+</xmile>

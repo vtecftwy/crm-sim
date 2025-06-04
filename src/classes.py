@@ -39,7 +39,7 @@ class Account:
 
 
 class Opportunity:
-
+    
     _osizes = {
         AccountType.SMALL:{'val_min': 10_000, 'val_max': 100_000},
         AccountType.MEDIUM:{'val_min': 100_000, 'val_max': 500_000},
@@ -52,7 +52,7 @@ class Opportunity:
         account, 
         name, 
         stage=OpportunityStage.IDENTIFIED, 
-        source=None
+        source=None,
         ):
 
         self.env = env

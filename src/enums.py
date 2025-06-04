@@ -4,21 +4,23 @@ class AccountStage(Enum):
     """
     Enum representing the state of a sales process.
     """
+    # Latent
+    LEAD = auto()
     # Prospecting
-    MQL = 1
+    MQL = auto()
     # Qualification
-    SQL = 2
+    SQL = auto()
     # Needs Assessment
-    PROSPECTS = 3   
+    PROSPECT = auto()   
     # Presentation
-    PITCHED = 4
+    PITCHED = auto()
     # Objection Handling, Bidding
-    BIDDED = 5
+    BIDDED = auto()
     # Negotiating, Closing
-    SIGNED = 6
+    SIGNED = auto()
     # Post-Sales Follow-up
-    ACTIVE = 7
-    STALE = 8
+    ACTIVE = auto()
+    STALE = auto()
 
 class OpportunityStage(Enum):
     """
@@ -38,7 +40,6 @@ class AccountStatus(Enum):
     ACTIVE = auto()
     STALE = auto()
     
-
 class AccountType(Enum):
     """
     Enum representing the type of account.
@@ -47,6 +48,20 @@ class AccountType(Enum):
     MEDIUM = auto()
     LARGE = auto()
 
+class Industry(Enum):
+    FoodnBeverage = auto()
+    ConsumerGoods = auto()
+    Pharmaceuticals = auto()
+    IndustrialManufacturing = auto()
+    Chemicals = auto()
+    Electronics = auto()
+    AutomotiveParts = auto()
+    PackagingSI = auto()
+
+class Country(Enum):
+    EU = auto()
+    US = auto
+    CN = auto()
 
 class PurchaseOrderSize(Enum):
     """

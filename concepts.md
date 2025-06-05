@@ -283,3 +283,26 @@ You can assign **realistic purchase orders** based on company size and industry:
 > - Industry Events: 10.73%
 > - Direct Call: 7.41%
 
+# Reference Conversion Rates
+
+- nb mthly website visitor=2900
+- website cta rate=0.03
+- online campaigns clickthru=0.1
+- online campaigns targets=1000
+- nb industry events=1
+- rawleads industry events=80 * nb industry events
+- rawleads salesreps=30
+- 
+- rawlead2mql website=0.41
+- rawlead2mql online campaign=0.38
+- rawlead2mql industry event=0.3
+- salesrep leads2mql=0.02
+- 
+- mql2sql=0.15
+- sql2prospect=0.7
+- prospect2prez=0.7
+- prez2bid=0.6
+- bid2close=0.3
+- customer satisfaction rate=0.98
+- 
+- decay rate=0.15

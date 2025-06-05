@@ -1,184 +1,169 @@
+import numpy as np
+import itertools
+import matplotlib.pyplot as plt
 import pandas as pd
 import random
+import seaborn as sns   
 import simpy
 
-from classes import SalesRep, Account, Opportunity
+from agents import MarketingDpt, SalesRep, Account, record_accounts_stats
+from datetime import datetime, timedelta
 from enums import AccountStage, AccountType, LeadSource
 from utils import salesrep_name_generator, account_info_generator
 
+from pathlib import Path
+from uuid import uuid4
+
+from agents import MarketingDpt, SalesRep, Account, record_accounts_stats
+from enums import AccountStatus, AccountType, AccountStage, Country, Industry
+from enums import LeadSource
+from enums import MarketingMessages, SalesRepMessages
+from utils import account_info_generator, salesrep_name_generator
 
 
 class CustomerRelationManagerSimulator:
-    def __init__(self, nb_salesreps=3, nb_accounts=5):
+    def __init__(self, nb_salesreps=5, nb_mql_accounts=20, nb_sql_accounts=20):
         self.env = simpy.Environment()
-        self.sales_reps = {}
+        self.env.sales_reps = []  # type: ignore
+        self.env.accounts = []   # type: ignore
+        self.marketing = MarketingDpt(self.env)
         self.salesrep_name_gen = salesrep_name_generator()
         self.setup_salesreps(nb_salesreps)
-        self.accounts = {}
         self.account_info_gen = account_info_generator()
-        self.setup_accounts(nb_accounts)
-        self.opportunities = {}
+        self.setup_accounts(nb_mql_accounts, nb_sql_accounts)
+
+        self.env.process(self.new_mql_arrival(arrival_rate=0.25)) # MQL arrival rate
+        self.env.process(record_accounts_stats(self.env))
 
     # Methods to setup the simulation
     def setup_salesreps(self, nb_salesreps):
         """Initialize sales reps."""
-        if len(self.sales_reps) > 0: 
+        if len(self.env.sales_reps) > 0: # type: ignore
             return
         else:
             for _ in range(nb_salesreps):
                 salesrep = SalesRep(self.env, next(self.salesrep_name_gen))
                 self.add_salesrep(salesrep)
 
-    def setup_accounts(self, nb_accounts, account_type=None, lead_source=None):
+    def setup_accounts(self, nb_mql_accounts, nb_sql_accounts):
         """Initialize accounts."""
-        nb_accounts = int(nb_accounts)
-        if nb_accounts == 0: return
-        if account_type is None:
-            account_type = random.choice(list(AccountType))
-        lead_source = LeadSource.WEBSITE_CTA if lead_source is None else lead_source
-        
-        for _ in range(nb_accounts):
-            co_info = next(self.account_info_gen) 
-            account = Account(
-                self.env, 
-                name=co_info['Company Name'],
-                country=co_info['Country'],
-                industry=co_info['Industry'],
-                account_type=account_type,
-                lead_source=lead_source,
-                )
-            self.add_account(account)
-            self.assign_random_salesrep(account)
+        nb_mql = int(nb_mql_accounts)
+        nb_sql = int(nb_sql_accounts)
+        if nb_mql > 0:
+            for i,_ in enumerate(range(nb_mql)):
+                self.add_account(stage=AccountStage.MQL)
+            print(f"Created {nb_mql} MQL accounts")
+        if nb_sql > 0:
+            for i,_ in enumerate(range(nb_sql)):
+                self.add_account(stage=AccountStage.SQL)
+            print(f"Created {nb_sql} SQL accounts")            
 
     # Methods to manage accounts and sales reps
-    def add_account(self, account):
-        self.accounts[account.uid] = account
-        # print(f"{self.env.now}: Account {account.name} added to CRM.")
-
     def add_salesrep(self, salesrep):
-        self.sales_reps[salesrep.uid] = salesrep
-        # print(f"{self.env.now}: Sales Rep {salesrep.name} added to CRM.")
+        self.env.sales_reps.append(salesrep)  # type: ignore
 
-    def assign_salesrep(self, account, salesrep):
-        self.accounts[account.uid].set_sales_rep(salesrep)
+    def add_account(self, stage, **kwargs):
+        co_info = next(self.account_info_gen)
+        sales_rep_loop = itertools.cycle(self.env.sales_reps) # type: ignore
+        account = Account(
+            self.env, 
+            name=co_info['Company Name'],
+            marketing=self.marketing,
+            country=co_info['Country'],
+            industry=co_info['Industry'],
+            account_type=kwargs.get('account_type', random.choice(list(AccountType))),
+            lead_source=kwargs.get('lead_source', random.choice(list(LeadSource))),
+            )
+        account.stage = stage
+        if stage == AccountStage.SQL:
+            account.assigned_salesrep = next(sales_rep_loop)
+        # print(f"[{self.env.now:.2f}]: Account {account.name} added to CRM ({len(self.env.accounts)}).")
 
-    def assign_random_salesrep(self, account):
-        """Assign a random sales rep to the account."""
-        salesrep_keys = list(self.sales_reps.keys())
-        key = random.choice(salesrep_keys)
-        self.assign_salesrep(account, self.sales_reps[key])
+    # Processes
+    def new_mql_arrival(self, arrival_rate):
+        while True:
+            delay = random.expovariate(arrival_rate)
+            t = self.env.now + delay
+            yield self.env.timeout(delay)
+            self.add_account(stage=AccountStage.MQL)
 
-    # Methods to manage opportunities
-    def add_opportunities(self, idxs):
-        pass
+    # Reporting and Plotting
+    def convert_lists_to_df(self):
+        salesrep_df = pd.DataFrame({sr.uid: sr() for sr in self.env.sales_reps})  # type: ignore
+        return salesrep_df.T
 
-    def add_opportunity(self,account):
-        pass
+    def get_crm_transactions(self):
+        """Get CRM transactions as a DataFrame."""
+        if hasattr(self.env, 'crm_transactions'):
+            return pd.DataFrame(self.env.crm_transactions) # type: ignore
+        else:
+            print("No CRM transactions found. Returning empty dataframe")
+            return pd.DataFrame(columns=['timestamp', 'initiator', 'recipient', 'message', 'type'])
 
-    # Methods to update accounts with SD Simulation
-    def get_uids_per_stage(self):
-        """Create indexes of account UID per stage"""
-        acct_uid_per_stage = {}
-        df = self.retrieve_accounts()
-        for stage in list(AccountStage):
-            # print(df.loc[df['stage'] == stage, :]['uid'].tolist())
-            acct_uid_per_stage[stage] = df[df['stage'] == stage]['uid'].tolist()
-        return acct_uid_per_stage
+    def get_account_stats(self):
+        """Get account statistics as a DataFrame."""
+        if hasattr(self.env, 'account_stats'):
+            df = pd.DataFrame(self.env.account_stats).set_index('timestamp', drop=False).sort_index() # type: ignore
 
-    def _create_new_accounts(self, row):
-        website, campaign, events, salesreps  = row.loc[['mql website', 'mql online campaign', 'mql industry events', 'mql salesreps']]
-        # print(website, campaign,events, salesreps)
+            d1 = datetime(year=2026, month=1, day=5, hour=0, minute=0, second=0)
+            week = timedelta(weeks=1)
+            df.index = df.loc[:, 'timestamp'].apply(lambda x: d1 + week * x) #type: ignore
+            df_monthly = df.resample('ME').last().drop(columns=['timestamp'])
+            return df_monthly
+        else:
+            print("No account stats found. Returning empty dataframe")
+            return pd.DataFrame(columns=['LEAD', 'MQL', 'SQL', 'OPPORTUNITY', 'CLOSED_WON', 'CLOSED_LOST', 'STALE', 'nb_accounts'])
 
-        self.setup_accounts(
-            nb_accounts=website,
-            lead_source=LeadSource.WEBSITE_CTA,
-        )
-        self.setup_accounts(
-            nb_accounts=campaign,
-            lead_source=LeadSource.EMAIL_CAMPAIGN,
-        )
-        self.setup_accounts(
-            nb_accounts=events,
-            lead_source=LeadSource.INDUSTRY_EVENT,
-        )
-        self.setup_accounts(
-            nb_accounts=salesreps,
-            lead_source=LeadSource.SALES_REP,
-    )
+    def plot_account_stats(self, as_share=True, show_mql=True):
+        """Plot account statistics."""
+        df = self.get_account_stats().drop(columns=['LEAD','STALE', 'nb_accounts'])
+        if as_share: 
+            df_pct = df.div(df.sum(axis=1), axis=0)  # Normalize to share
+        else:
+            df_pct = df.copy()
 
-    def _remove_decayed_accounts(self, row):
-        uids_per_stage = self.get_uids_per_stage()
-        n_mql, n_sql, n_prospect = row.loc[['mql decay', 'sql decay', 'prospect decay']].astype(int)
-        mql_idx = random.sample(uids_per_stage[AccountStage.MQL], n_mql)
-        sql_idx = random.sample(uids_per_stage[AccountStage.SQL], n_sql)
-        prospect_idx = random.sample(uids_per_stage[AccountStage.PROSPECTS], n_prospect)
-        # print(mql_idx, sql_idx, prospect_idx)
-        for idx in mql_idx + sql_idx + prospect_idx:
-            del self.accounts[idx]
+        # Use month start for index for better bar alignment
+        df_pct.index = df_pct.index.to_period('M').to_timestamp('M')  # type: ignore
 
-    def _shift_accounts(self, row):
-        """Shift accounts between stages"""
-        def move_accounts(idxs, stage):
-            for idx in idxs:
-                self.accounts[idx].stage = stage
+        # Calculate bar width as number of days in each month
+        month_days = df_pct.index.days_in_month * 0.75  #type: ignore
+        bar_widths = pd.to_timedelta(month_days, unit='D')
 
-        flows = [
-            'sales qualified', 'new prospects', 'presentations', 'bids', 'contracts', 
-            'satisfied', 'unsatisfied', 'completed',
-            'stale prospects', 'lost bids'
-            ]
-        sq, np, prez, bids, c, sta, unsat, comp, stalep, lost = row.loc[flows].astype(int)
-        # print(sq, np, prez, bids, c, sta, unsat, stalep, lost)
+        # Prepare for stacking
+        x = df_pct.index
+        bottom = np.zeros(len(df_pct))
+        colors = sns.color_palette("tab10", n_colors=len(df_pct.columns))
+
+        plt.figure(figsize=(8,4))
+        for i, col in enumerate(df_pct.columns):
+            if not show_mql and col == 'MQL':
+                continue
+            plt.bar(x, df_pct[col], width=bar_widths, bottom=bottom, label=col, color=colors[i])
+            bottom += df_pct[col].values #type: ignore
+
+        plt.xlabel("Timestamp")
+        plt.ylabel("Share of Total")
+        plt.title("Account Stages as Share of Total Over Time")
+        plt.legend(title="Stage", bbox_to_anchor=(1.05, 1), loc='upper left')
+        plt.tight_layout()
+        plt.show()
+
+    # Helper for simulation
+    def run(self, until=None):
+        self.env.run(until=until)
+
+    def step(self):
+        """Run one step of the simulation."""
+        self.env.step()
+
+    def iterate(self):
+        self.env.run(until=self.env.peek() + 1)
 
 
-        uids_per_stage = self.get_uids_per_stage()
-            
-        idxs = random.sample(uids_per_stage[AccountStage.MQL], sq)
-        move_accounts(idxs, AccountStage.SQL)
-        
-        idxs = random.sample(uids_per_stage[AccountStage.SQL], np)
-        move_accounts(idxs, AccountStage.PROSPECTS)
-        
-        idxs = random.sample(uids_per_stage[AccountStage.PROSPECTS], prez)
-        move_accounts(idxs, AccountStage.PITCHED)
-        
-        idxs = random.sample(uids_per_stage[AccountStage.PITCHED], bids)
-        move_accounts(idxs, AccountStage.BIDDED)
-        self.add_opportunities(idxs)
-
-        idxs = random.sample(uids_per_stage[AccountStage.BIDDED], c)
-        move_accounts(idxs, AccountStage.SIGNED)
-        
-        idxs = random.sample(uids_per_stage[AccountStage.SIGNED], sta)
-        move_accounts(idxs, AccountStage.ACTIVE)
-        
-        idxs = random.sample(uids_per_stage[AccountStage.ACTIVE], unsat)
-        move_accounts(idxs, AccountStage.STALE)
-
-        uids_per_stage = self.get_uids_per_stage()
-
-        idxs = random.sample(uids_per_stage[AccountStage.PITCHED], stalep)
-        move_accounts(idxs, AccountStage.SQL)
-
-        idxs = random.sample(uids_per_stage[AccountStage.BIDDED], lost)
-        move_accounts(idxs, AccountStage.SQL)
-        
-        idxs = random.sample(uids_per_stage[AccountStage.ACTIVE], comp)
-        move_accounts(idxs, AccountStage.SQL)
-
-    def update_accounts(self, df, verbose=False):
-        """Update accounts based on the last step result df of data."""
-        for idx, row in df.iterrows():
-            if verbose: print([len(v) for k,v in self.get_uids_per_stage().items()])
-            self._create_new_accounts(row)
-            if verbose: print([len(v) for k,v in self.get_uids_per_stage().items()])
-            self._remove_decayed_accounts(row)
-            if verbose: print([len(v) for k,v in self.get_uids_per_stage().items()])
-            self._shift_accounts(row)
-            if verbose: 
-                print([len(v) for k,v in self.get_uids_per_stage().items()])
-                print('-----')
-
-    # Methods for outputs and reports
-    def retrieve_accounts(self) -> pd.DataFrame:
-        return pd.DataFrame(data=[a() for a in self.accounts.values()])
+if __name__ == "__main__":
+    # Example usage
+    crm_simulator = CustomerRelationManagerSimulator(nb_salesreps=5, nb_mql_accounts=20, nb_sql_accounts=20)
+    crm_simulator.run(until=100)  # Run the simulation for 100 time units
+    crm_simulator.plot_account_stats(as_share=True)
+    print(crm_simulator.get_crm_transactions())
+    print(crm_simulator.convert_lists_to_df())

@@ -67,12 +67,15 @@ class SDModel:
             # concatenate new results to existing results, dropping the first row of new result equal to last row
             self.all_results_df = pd.concat([self.all_results_df, self.step_results_df.iloc[1:,]])
 
-    def plot_results(self, coi, title='ModelOutput Results'):
+    def parse_stocks(self):
+        raise NotImplementedError("This method is not implemented yet. Please implement the parse_stocks method to extract stock variables from the model.")
+
+    def plot_results(self, coi, title='ModelOutput Results', figsize=(12, 6)):
         if self.all_results_df is None: 
             print("No results to plot. Please run the model first.")
             return
         else:
-            fig, ax = plt.subplots(figsize=(12, 6))
+            fig, ax = plt.subplots(figsize=figsize)
             self.all_results_df[coi].plot(ax=ax)
             plt.title(title)
             plt.xlabel('Month')

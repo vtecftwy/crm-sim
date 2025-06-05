@@ -91,3 +91,37 @@ class Month(Enum):
     IN_WEEKS = IN_MONTH * 4
     IN_DAYS = IN_WEEKS * 5
     IN_HOURS = IN_DAYS * 8
+
+class MarketingMessages(Enum):
+    """Enum for all possible messages from MarketingDpt to Accounts"""
+    EMAIL_CAMPAIGN = "email campaign"
+    INDUSTRY_EVENT = "industry event"
+    WEBSITE_CTA = "website CTA"
+
+class SalesRepMessages(Enum):
+    """Enum for all possible messages from SalesRep to Accounts"""
+    USER_NEED = "user need review"
+    PRESENTATION = "presentation request"
+    BID = "bid submission"
+    CONTRACT_NEGO = "contract negotiation"
+
+class SalesRejectionMessages(Enum):
+    USER_NEED = "account not opened for discussion at this time"
+    PRESENTATION = 'account declined our presentation request'
+    BID = 'account did not invite us to bid'
+    CONTRACT_NEGO = 'project contract lost'
+    
+class OpsMessages(Enum):
+    """Enum for all possible messages from SalesRep to Accounts about Ops"""
+    PROJECT_FEEDBACK = 'completed project feedback'
+    PROJECT_POSITIVE = "project handover positive"
+    PROJECT_NEGATIVE = "project handover negative"
+
+class InternalMessages(Enum):
+    MQL2SQL = 'MQL to SQL conversion'
+    SQL2PROSPECT = 'SQL 2 PROSPECT conversion'
+    PROSPECT2PITCHED = 'PROSPECT to PITCHED conversion'
+    PITCHED2BIDDED = 'PITCHED to BIDDED conversion'
+    BIDDED2SIGNED = 'BIDDED to SIGNED conversion'
+    SIGNED2ACTIVE = 'SIGNED to SATISFIED'
+    SIGNED2STALE = 'SIGNED to UNSATISFIED'

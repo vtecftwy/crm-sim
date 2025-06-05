@@ -45,10 +45,14 @@ class CustomerRelationManagerSimulator:
                 salesrep = SalesRep(self.env, next(self.salesrep_name_gen))
                 self.add_salesrep(salesrep)
 
-    def setup_accounts(self, nb_mql_accounts, nb_sql_accounts):
+    def setup_accounts(self, nb_mql_accounts, nb_sql_accounts, nb_others=15):
         """Initialize accounts."""
         nb_mql = int(nb_mql_accounts)
         nb_sql = int(nb_sql_accounts)
+        nb_prospects = int(nb_others)
+        nb_pitched = int(nb_others * .80)
+        nb_bidded = int(nb_others * .66)
+        nb_signed = int(nb_others * .35)
         if nb_mql > 0:
             for i,_ in enumerate(range(nb_mql)):
                 self.add_account(stage=AccountStage.MQL)
@@ -57,6 +61,23 @@ class CustomerRelationManagerSimulator:
             for i,_ in enumerate(range(nb_sql)):
                 self.add_account(stage=AccountStage.SQL)
             print(f"Created {nb_sql} SQL accounts")            
+        if nb_prospects > 0:
+            for i,_ in enumerate(range(nb_prospects)):
+                self.add_account(stage=AccountStage.PROSPECT)
+            print(f"Created {nb_prospects} PROSPECT accounts")
+        if nb_pitched > 0:
+            for i,_ in enumerate(range(nb_pitched)):
+                self.add_account(stage=AccountStage.PITCHED)
+            print(f"Created {nb_pitched} PITCHED accounts")
+        if nb_bidded > 0:
+            for i,_ in enumerate(range(nb_bidded)):
+                self.add_account(stage=AccountStage.BIDDED)
+            print(f"Created {nb_bidded} BIDDED accounts")
+        if nb_signed > 0:
+            for i,_ in enumerate(range(nb_signed)):
+                self.add_account(stage=AccountStage.SIGNED)
+            print(f"Created {nb_signed} SIGNED accounts")
+        print(f"Total accounts created: {len(self.env.accounts)}")  # type: ignore
 
     # Methods to manage accounts and sales reps
     def add_salesrep(self, salesrep):
@@ -114,9 +135,15 @@ class CustomerRelationManagerSimulator:
             print("No account stats found. Returning empty dataframe")
             return pd.DataFrame(columns=['LEAD', 'MQL', 'SQL', 'OPPORTUNITY', 'CLOSED_WON', 'CLOSED_LOST', 'STALE', 'nb_accounts'])
 
-    def plot_account_stats(self, as_share=True, show_mql=True):
+    def plot_account_stats(self, as_share=True, hide_mql=True, hide_mql_sql=True):
         """Plot account statistics."""
-        df = self.get_account_stats().drop(columns=['LEAD','STALE', 'nb_accounts'])
+        if hide_mql_sql:
+            df = self.get_account_stats().drop(columns=['LEAD', 'MQL', 'SQL', 'STALE', 'nb_accounts'])        
+        elif hide_mql:
+            df = self.get_account_stats().drop(columns=['LEAD','STALE', 'MQL', 'nb_accounts'])
+        else:
+            df = self.get_account_stats().drop(columns=['LEAD', 'STALE', 'nb_accounts'])
+
         if as_share: 
             df_pct = df.div(df.sum(axis=1), axis=0)  # Normalize to share
         else:
@@ -136,8 +163,6 @@ class CustomerRelationManagerSimulator:
 
         plt.figure(figsize=(8,4))
         for i, col in enumerate(df_pct.columns):
-            if not show_mql and col == 'MQL':
-                continue
             plt.bar(x, df_pct[col], width=bar_widths, bottom=bottom, label=col, color=colors[i])
             bottom += df_pct[col].values #type: ignore
 

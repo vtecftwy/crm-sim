@@ -119,9 +119,13 @@ class OpsMessages(Enum):
 
 class InternalMessages(Enum):
     MQL2SQL = 'MQL to SQL conversion'
+    SQL2SQL = 'No conversion out of SQL'
     SQL2PROSPECT = 'SQL 2 PROSPECT conversion'
+    PROSPECT2PROSPECT = 'No conversion out of PROSPECT'
     PROSPECT2PITCHED = 'PROSPECT to PITCHED conversion'
     PITCHED2BIDDED = 'PITCHED to BIDDED conversion'
+    PITCHED2PROSPECT = 'Back to PROSPECT, not invited for bidding'
     BIDDED2SIGNED = 'BIDDED to SIGNED conversion'
+    BIDDED2SQL = 'Back to SQL, bid lost'
     SIGNED2ACTIVE = 'SIGNED to SATISFIED'
     SIGNED2STALE = 'SIGNED to UNSATISFIED'

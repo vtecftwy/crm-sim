@@ -73,7 +73,7 @@ class MarketingDpt:
     def send_email_campaign(self):
         while True:
             targetted = self.pick_targetted_accounts()
-            self.log(f"{len(targetted)} accounts targetted for email campaign")
+            # self.log(f"{len(targetted)} accounts targetted for email campaign")
             for account in targetted:
                 yield account.inbox.put('email campaign')
                 self.record_crm_transaction(
@@ -81,9 +81,9 @@ class MarketingDpt:
                     recipient_uid=account.uid, 
                     msg=self.msgs.EMAIL_CAMPAIGN.value,
                     type_trans='External')
-                self.log(f"Sent email targeting {account.name}")
+                # self.log(f"Sent email targeting {account.name}")
             time_to_next_campaign = self.compute_time_to_next_campaign()
-            self.log(f"Next campaign at {self.env.now + time_to_next_campaign:.2f}")
+            # self.log(f"Next campaign at {self.env.now + time_to_next_campaign:.2f}")
             yield self.env.timeout(time_to_next_campaign)
 
     def pick_targetted_accounts(self):
@@ -179,15 +179,16 @@ class SalesRep:
         self.inbox = simpy.Store(env)
         self.assigned_accounts = []
         self.wkly_review_needs = 10
-        self.wkly_request_for_presentation = 10
+        self.wkly_request_for_presentation = 5
         self.wkly_request_for_bid = 5
-        self.wkly_negotiation = 5
-        self.wkly_completion_handover = 5
+        self.wkly_negotiation = 3
+        self.wkly_completion_handover = 2
         # Register processes
         self.env.process(self.review_user_need())
         self.env.process(self.meeting_request_for_presentation())
         self.env.process(self.bid_request())
         self.env.process(self.contract_negotiation())
+        self.env.process(self.completion_signoff())
         self.env.process(self.check_inbox())
         # Register this sales rep in the environment
         if hasattr(self.env, 'salesreps'): 
@@ -207,7 +208,7 @@ class SalesRep:
         while True:
             sql = self.get_accounts_per_stage()[AccountStage.SQL]
             nb_sql = len(sql)
-            self.log(f"sql: {nb_sql}, {[a.name for a in sql]}")
+            # self.log(f"sql: {nb_sql}, {[a.name for a in sql]}")
             targetted = random.sample(sql,min(nb_sql, self.wkly_review_needs))
             for account in targetted:
                 msg = self.msgs.USER_NEED.value
@@ -220,7 +221,6 @@ class SalesRep:
                     )
                 self.log(f"Sent {msg} for {account.name} ({account.uid})")
             time_to_next_week = self.env.now - int(self.env.now) + 1
-            print(time_to_next_week)
             yield self.env.timeout(time_to_next_week) 
 
     def meeting_request_for_presentation(self):
@@ -231,7 +231,7 @@ class SalesRep:
         while True:
             accts = self.get_accounts_per_stage()[AccountStage.PROSPECT]
             nb_a = len(accts)
-            self.log(f"accts: {nb_a}, {[a.name for a in accts]}")
+            # self.log(f"accts: {nb_a}, {[a.name for a in accts]}")
             targetted = random.sample(accts,min(nb_a, self.wkly_request_for_presentation))
             for account in targetted:
                 msg = self.msgs.PRESENTATION.value
@@ -254,7 +254,7 @@ class SalesRep:
         while True:
             accts = self.get_accounts_per_stage()[AccountStage.PITCHED]
             nb_a = len(accts)
-            self.log(f"prospects: {nb_a}, {[a.name for a in accts]}")
+            # self.log(f"prospects: {nb_a}, {[a.name for a in accts]}")
             targetted = random.sample(accts,min(nb_a, self.wkly_request_for_bid))
             for account in targetted:
                 msg = self.msgs.BID.value
@@ -277,7 +277,7 @@ class SalesRep:
         while True:
             accts = self.get_accounts_per_stage()[AccountStage.BIDDED]
             nb_a = len(accts)
-            self.log(f"prospects: {nb_a}, {[a.name for a in accts]}")
+            # self.log(f"prospects: {nb_a}, {[a.name for a in accts]}")
             targetted = random.sample(accts,min(nb_a, self.wkly_request_for_bid))
             for account in targetted:
                 msg = self.msgs.CONTRACT_NEGO.value
@@ -300,7 +300,7 @@ class SalesRep:
         while True:
             accts = self.get_accounts_per_stage()[AccountStage.SIGNED]
             nb_a = len(accts)
-            self.log(f"prospects: {nb_a}, {[a.name for a in accts]}")
+            # self.log(f"accts: {nb_a}, {[a.name for a in accts]}")
             targetted = random.sample(accts,min(nb_a, self.wkly_completion_handover))
             for account in targetted:
                 msg = OpsMessages.PROJECT_FEEDBACK.value
@@ -311,7 +311,7 @@ class SalesRep:
                     msg=msg,
                     type_trans='External',
                     )
-                self.log(f"Sent {msg} for {account.name} ({account.uid})")
+                # self.log(f"Sent {msg} for {account.name} ({account.uid})")
             time_to_next_week = self.env.now - int(self.env.now) + 1
             yield self.env.timeout(time_to_next_week) 
 
@@ -319,7 +319,6 @@ class SalesRep:
         while True:
             # Receive confirmation from accounts
             msg = yield self.inbox.get()
-            self.log(f"Received message: {msg}")
             uid, msg = msg.split('|||')
             self.record_crm_transaction(
                 initiator_uid=uid, 
@@ -333,6 +332,7 @@ class SalesRep:
                 if account:
                     if msg in self.expected_messages(account.stage):
                         msg2send = getattr(self.intmsgs, f"{account.stage.name.upper()}2{self.msg2stages[msg].name}").name  # type: ignore
+                        self.log(f"Converting {account.name} from {account.stage.name} to {self.msg2stages[msg].name} stage")
                         account.stage = self.msg2stages[msg]
                         self.record_crm_transaction(
                             initiator_uid=self.uid, 
@@ -340,7 +340,6 @@ class SalesRep:
                             msg=msg2send,
                             type_trans='Internal'
                             )
-                        self.log(f"Converted {account.name} from {account.stage.name} to {self.msg2stages[msg].name} stage")
 
     def record_crm_transaction(self, initiator_uid, recipient_uid, msg, type_trans, **kwargs):
         """Record a transaction in the environment system."""
@@ -362,13 +361,13 @@ class SalesRep:
         if stage == AccountStage.LEAD:
             return []
         elif stage == AccountStage.SQL:
-            return [SalesRepMessages.USER_NEED.value]
+            return [SalesRepMessages.USER_NEED.value, SalesRejectionMessages.USER_NEED.value]
         elif stage == AccountStage.PROSPECT:
-            return [SalesRepMessages.PRESENTATION.value]
+            return [SalesRepMessages.PRESENTATION.value, SalesRejectionMessages.PRESENTATION.value]
         elif stage == AccountStage.PITCHED:
-            return [SalesRepMessages.BID.value]
+            return [SalesRepMessages.BID.value, SalesRejectionMessages.BID.value]
         elif stage == AccountStage.BIDDED:
-            return [SalesRepMessages.CONTRACT_NEGO.value]
+            return [SalesRepMessages.CONTRACT_NEGO.value, SalesRejectionMessages.CONTRACT_NEGO.value]
         elif stage == AccountStage.SIGNED:
             return [OpsMessages.PROJECT_POSITIVE.value, OpsMessages.PROJECT_NEGATIVE.value]
         elif stage == AccountStage.ACTIVE:
@@ -422,24 +421,32 @@ class Account:
         MarketingMessages.WEBSITE_CTA.value: .2
     }
     sales_conversion_rates = {
-        SalesRepMessages.USER_NEED.value: 0.9,
-        SalesRepMessages.PRESENTATION.value: 0.6,
-        SalesRepMessages.BID.value: 0.5,
-        SalesRepMessages.CONTRACT_NEGO.value: 0.5,
+        SalesRepMessages.USER_NEED.value: 0.8,    # 0.9
+        SalesRepMessages.PRESENTATION.value: 0.6, # 0.6
+        SalesRepMessages.BID.value: 0.6,
+        SalesRepMessages.CONTRACT_NEGO.value: 0.5 ,
+        SalesRejectionMessages.USER_NEED.value: 0.8,    # 0.9
+        SalesRejectionMessages.PRESENTATION.value: 0.6, # 0.6
+        SalesRejectionMessages.BID.value: 0.6,
+        SalesRejectionMessages.CONTRACT_NEGO.value: 0.5,
     }
     sales_conversion_delays = {
         SalesRepMessages.USER_NEED.value: 1,
         SalesRepMessages.PRESENTATION.value: 4 * 1,
-        SalesRepMessages.BID.value: 4 * 3,
+        SalesRepMessages.BID.value: 4 * 1,
         SalesRepMessages.CONTRACT_NEGO.value: 4 * 2,
+        SalesRejectionMessages.USER_NEED.value: 1,
+        SalesRejectionMessages.PRESENTATION.value: 4 * 1,
+        SalesRejectionMessages.BID.value: 4 * 1,
+        SalesRejectionMessages.CONTRACT_NEGO.value: 4 * 2,
     }
     ops_conversion_rates = {
         OpsMessages.PROJECT_FEEDBACK.value: 1,
         OpsMessages.PROJECT_POSITIVE.value: 0.95,
     }
     ops_conversion_delays = {
-        OpsMessages.PROJECT_FEEDBACK.value: 6 * 4,
-        OpsMessages.PROJECT_POSITIVE.value: 6 * 4
+        OpsMessages.PROJECT_FEEDBACK.value: 4 * 3,
+        OpsMessages.PROJECT_POSITIVE.value: 4 * 3,
     }
 
     srmsg = SalesRepMessages
@@ -485,43 +492,71 @@ class Account:
         return random.uniform(low, high)
 
     def decide(self, conversion_rates, key):
-        return random.random() <= conversion_rates[key]
+        srm = SalesRepMessages
+        srr = SalesRejectionMessages
+        c = Country
+        i = Industry
+        t = AccountType
+        sales_conversion_delta = {
+            MarketingMessages.EMAIL_CAMPAIGN.value:{},
+            srm.USER_NEED.value: {c.CN.name: 0.75, c.EU.name: 1.25},
+            srm.PRESENTATION.value: {i.ConsumerGoods.name: 1.25, i.Pharmaceuticals.name: 1.75, i.FoodnBeverage.name: 1.5, i.AutomotiveParts.name:0.5},
+            srm.BID.value: {i.ConsumerGoods.name: 1.25, i.Pharmaceuticals.name: 1.75, i.FoodnBeverage.name: 1.5, i.AutomotiveParts.name:0.5},
+            srm.CONTRACT_NEGO.value: {c.CN.name: 0.75, c.EU.name: 1.1},
+            srr.USER_NEED.value: {},
+            srr.PRESENTATION.value: {},
+            srr.BID.value: {},
+            srr.CONTRACT_NEGO.value: {},
+        }
+        ctry = self.country.name
+        ind = self.industry.name
+        factor_1 = sales_conversion_delta[key].get(ctry,1.)
+        factor_2 = sales_conversion_delta[key].get(ind,1.)
+        return random.random() <= conversion_rates[key] * factor_1 * factor_2
 
     def check_inbox(self):
         while True:
             msg = yield self.inbox.get()
-            self.log(f"{self.name} received message: {msg}")
+            # self.log(f"{self.name} received message: {msg}")
             if msg in list(self.mktg_conversion_rates.keys()):
                 # self.log(f"Conversion rate: {self.mktg_conversion_rates[msg]}")
                 if self.decide(self.mktg_conversion_rates, msg):                    
                     yield self.env.timeout(self.mktg_conversion_delays[msg])
-                    self.log(f"Processing marketing message: {msg}")
+                    # self.log(f"Processing marketing message: {msg}")
                     self.marketing.inbox.put(f"{self.uid}|||{msg}")                    
             elif msg in list(self.sales_conversion_rates.keys()):
                 # self.log(f"Conversion rate: {self.sales_conversion_rates[msg]}")
+                delay = self.sales_conversion_delays[msg]
                 if self.decide(self.sales_conversion_rates, msg):
-                    # self.log(self.assigned_salesrep)
-                    # mgs = getattr(self.reject,self.('user need review').name)
-                    if self.assigned_salesrep:
-                        yield self.env.timeout(self.sales_conversion_delays[msg])
-                        self.log(f"Processing sales message: {msg}")
-                        # self.log(f"{self.uid}|||{msg}")
-                        self.assigned_salesrep.inbox.put(f"{self.uid}|||{msg}")
-                    else:
-                        raise RuntimeError(f"No sales rep assigned for {self.name}, cannot send message {msg}")
-            elif msg in list(self.ops_conversion_rates.keys()):
-                # self.log(f"Conversion rate: {self.ops_conversion_rates[msg]}")
-                if self.decide(self.ops_conversion_rates, msg):
-                    msg = OpsMessages.PROJECT_POSITIVE.value
+                    # pick the received message to send back
+                    # self.log(f"{self.name} accepts {msg}")
+                    pass
                 else:
-                    msg = OpsMessages.PROJECT_NEGATIVE.value
+                    # pick the corresponding rejecting message to send back
+                    msg = getattr(self.srrej, self.srmsg(msg).name).value
+                    # self.log(f"{self.name} rejects {msg}")
                 if self.assigned_salesrep:
-                    yield self.env.timeout(self.ops_conversion_delays[msg])
-                    self.log(f"Processing sales message: {msg}")
+                    yield self.env.timeout(delay)
+                    # self.log(f"Processing sales message: {msg}")
                     # self.log(f"{self.uid}|||{msg}")
                     self.assigned_salesrep.inbox.put(f"{self.uid}|||{msg}")
                 else:
                     raise RuntimeError(f"No sales rep assigned for {self.name}, cannot send message {msg}")
+            elif msg in list(self.ops_conversion_rates.keys()):
+                if self.decide(self.ops_conversion_rates, msg):
+                    msg = OpsMessages.PROJECT_POSITIVE.value
+                    self.log(f"+++++++++++++++++++++++++++++++++++++++++ {self.uid}|||{msg}")
+                else:
+                    msg = OpsMessages.PROJECT_NEGATIVE.value
+                    self.log(f"----------------------------------------- {self.uid}|||{msg}")
+                if self.assigned_salesrep:
+                    yield self.env.timeout(self.ops_conversion_delays[msg])
+                    self.log(f"OPSSSSSSSSSS {self.uid}|||{msg}")
+                    self.assigned_salesrep.inbox.put(f"{self.uid}|||{msg}")
+                else:
+                    raise RuntimeError(f"No sales rep assigned for {self.name}, cannot send message {msg}")
+            else:
+                self.log(f"Unknown message type: {msg}")
 
     def log(self, msg):
         print(f"[{self.env.now:.2f}] {self.name}: {msg}")

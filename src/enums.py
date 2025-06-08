@@ -92,30 +92,29 @@ class Month(Enum):
     IN_DAYS = IN_WEEKS * 5
     IN_HOURS = IN_DAYS * 8
 
-class MarketingMessages(Enum):
-    """Enum for all possible messages from MarketingDpt to Accounts"""
+class MktgIntents(Enum):
+    """Enum for all possible intents from Marketing to Accounts"""
     EMAIL_CAMPAIGN = "email campaign"
     INDUSTRY_EVENT = "industry event"
-    WEBSITE_CTA = "website CTA"
 
-class SalesRepMessages(Enum):
+class SalesIntents(Enum):
     """Enum for all possible messages from SalesRep to Accounts"""
-    USER_NEED = "user need review"
-    PRESENTATION = "presentation request"
-    BID = "bid submission"
-    CONTRACT_NEGO = "contract negotiation"
+    USER_NEED = "user need discovery"
+    PRESENTATION = "rv for presentation"
+    BID = "opportunity to bid"
+    NEGO = "negotiation"
 
-class SalesRejectionMessages(Enum):
-    USER_NEED = "account not opened for discussion at this time"
-    PRESENTATION = 'account declined our presentation request'
-    BID = 'account did not invite us to bid'
-    CONTRACT_NEGO = 'project contract lost'
-    
-class OpsMessages(Enum):
-    """Enum for all possible messages from SalesRep to Accounts about Ops"""
-    PROJECT_FEEDBACK = 'completed project feedback'
-    PROJECT_POSITIVE = "project handover positive"
-    PROJECT_NEGATIVE = "project handover negative"
+class OpsIntents(Enum):
+    """Enum for all possible intents from Operations to Accounts"""
+    FEEDBACK_AT_COMPLETION = "feedback after project completion"
+
+class Actions(Enum):
+    """Enum for all possible actions in the CRM"""
+    REQUEST = 'request'
+    ACCEPT = 'accept'
+    REJECT = 'reject'
+    POSITIVE = 'satisfied'
+    NEGATIVE = 'unsatisfied'
 
 class InternalMessages(Enum):
     MQL2SQL = 'MQL to SQL conversion'

@@ -1,10 +1,17 @@
+import json
 import simpy
 import random
 
+
+from abc import ABC, abstractmethod
+from datetime import datetime, timedelta
+from functools import partial
+from typing import Any, Callable, Dict, List, Sequence, Tuple
 from uuid import uuid4
+
 from enum import Enum, auto
 from enums import AccountStage, AccountType, Industry, Country, LeadSource
-from enums import MarketingMessages, SalesRepMessages, SalesRejectionMessages, InternalMessages, OpsMessages
+from enums import MktgIntents, SalesIntents, OpsIntents, Actions, InternalMessages
 
 # Global parameters (can be tweaked)
 LEAD_CONVERSION_RATES = {
@@ -20,464 +27,619 @@ DELAY_RANGES = {
     'outbound_sales_event': (3, 5),
 }
 
+class BaseAgent(ABC):
+    """Base Agent class, used to create any other agent in the CRM simulation
 
-class MarketingDpt:
-    """simpy agent representing the Marketing Department
-
-    controls folowing processes"
-    - sending email campaigns
-    - checking inbox for responses from accounts, move accounts to MQL stage and assign SalesRep
+    Provides the following functionalities:
+    - inbox for receiving messages
+    - message handling
+    - handle processes based on intent in incoming messages.
     """
 
-    msgs = MarketingMessages
-    intmsgs = InternalMessages
-    mktg_conversion_rates = {
-        'inbound_mktg_event': 0.3,          # CTA on website, blogs, social media, webinars
-        'outbound_mktg_event': 0.2,         # Email campaigns, ads, industry events, ...
-        'inbound_sales_event': 0.2,         # CTA on website leading to a specific request for pricing
-        'outbound_sales_event': 0.15,       # Cold calls
-    }
-
-    msg2stages = {
-        msgs.EMAIL_CAMPAIGN.value: AccountStage.MQL,
-        msgs.INDUSTRY_EVENT.value: AccountStage.MQL,
-        msgs.WEBSITE_CTA.value: AccountStage.MQL
-    }
+    _category = "baseagent" 
     
-    def __init__(self, env):
-        self.env: simpy.Environment = env
-        self.name:str = 'Marketing'
-        self.uid:str = 'mktg-' + str(uuid4())
-        self.inbox = simpy.Store(env)
-        self.nb_targetted_accounts:int = 3
-        self.nb_yearly_campaigns:float = 52/3
-        # Register processes 
-        self.env.process(self.send_email_campaign())
-        self.env.process(self.check_inbox())
+    def __init__(self, crm):
+        self.crm = crm
+        # Define aliases for convenience
+        self.env = self.crm.env
 
-    # Utility Functions
-    def get_mql_accounts(self):
-        return [a for a in self.env.accounts if a.stage == AccountStage.MQL] # type: ignore
+        # call property method to check that category was defined the this class
+        self.category 
 
-    def assign_salesrep(self, account):
-        """Get the list of sales reps in the environment."""
-        salesrep = self.pick_salesrep(account)
-        account.assigned_salesrep = salesrep
-        salesrep.assigned_accounts.append(account)
-        self.log(f"Assigned {account.name} to {salesrep.name}")
+        # Create agent standard attributes
+        self.inbox = simpy.Store(self.env)
 
-    def pick_salesrep(self, account):
-        return sorted(self.env.salesreps, key=lambda x: len(x.assigned_accounts), reverse=False)[0] # type: ignore
+        # Register agent to collection crm.agents:dict
+        self.crm.register_agent_to_crm(self, self.category)
+
+        # Register all processes
+        self.env.process(self.handle_inbox())
+        # print(f"{self.category} registered process {self.handle_inbox.__name__}")
+
+        self.register_processes()
+
+        # Customise general crm log function
+        self.log = partial(self.crm.log, env=self.env, agent=self)
+
+        self.record_instance_creation()
+
+    # Agent Standard Processes
+    def handle_inbox(self):
+        """Process: handle incoming messages and triger relevant further process"""
+        while True:
+            json_msg = yield self.inbox.get()
+            self.log(f"Received message: {json_msg}")
+            msg = json.loads(json_msg)
+            intent = msg.get('intent', None)
+            self.log(f"Processing intent: {intent}")
+            if intent:
+                fn = self.process_map.get(intent, self.no_action)
+                self.log(f"Handling intent: {intent} with process {fn.__name__} {fn} and {msg}")
+                yield from fn(msg)
+
+
+    def no_action(self, msg):
+        # print(f"No_action called on {self.name}")
+        yield self.env.timeout(0)
+        # print(f"No action called on {self.name}")
+            
+    def register_processes(self):
+        """Register all processes in the agent to the environment"""
+        for p,kwargs in self.loprocesses:
+            if kwargs: self.env.process(p(**kwargs))
+            else: self.env.process(p())
+            print(f"{self.category} registered process: {p.__name__} with kwargs: {kwargs}")
+
+    def record_instance_creation(self):
+        self.crm.record_transaction(
+            msg={
+                'suid': self.crm.uid,
+                'ruid': self.uid,
+                'intent': f"new {self.category} instance",
+                'action': 'create',
+            },
+            transaction_type='system',
+        )
+    
+    @property
+    def category(self):
+        if self._category == "baseagent":
+            raise NotImplementedError(f"Class attribute '_category' in {self.__class__.__name__} class must be defined to another value then 'baseagent'")
+        return self._category
+    
+    # Properties to implement in practical classes
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """Name of the agent"""
+        pass
+
+    @property
+    @abstractmethod
+    def uid(self) -> str:
+        """Unique identifier for the agent"""
+        pass
+
+    @property
+    @abstractmethod
+    def process_map(self) -> Dict[str, Callable]:
+        """Map of "intent" to process functions"""
+        pass
+    
+    @property
+    @abstractmethod
+    def loprocesses(self) -> Sequence[Tuple[Callable, Dict]]:
+        """List of processes available in this agent
+
+        each process is defined as a tuple of (function, kwargs)
+        """
+        pass
+
+
+class MarketingDpt(BaseAgent):
+    """Marketing Department Agent
+
+    Outgoing processes:
+    - sending email campaigns
+    Incoming processes, triggered upon related message:
+    - move accounts to MQL stage and assign SalesRep to the account
+    """
+
+    _category = 'marketing'
+    
+    def __init__(self, crm):
+        """Initialize the Marketing Department Agent"""
+        self._name:str = 'Marketing Dpt'
+        self._uid:str = 'mktg-' + str(uuid4())
+
+        # Define process parameters
+        self._loprocesses = [
+            (self.send_email_campaign, None)
+            ]
+        self._process_map = {
+            MktgIntents.EMAIL_CAMPAIGN.value: self.process_email_campaign_replies,
+        }
+        self.marketing_parameters = {
+            MktgIntents.EMAIL_CAMPAIGN.value: {
+                'nb_targetted_accounts': 10, # Number of accounts to target in each campaign
+                'nb_yearly_campaigns': 52 / 3,
+            },
+            MktgIntents.INDUSTRY_EVENT.value: {
+                'nb_leads_per_event': 280, # Number of accounts to target in each event
+                'industry_event_conversion_rate': 0.6,
+                'nb_yearly_events': 12,
+            }
+        }
+
+        super().__init__(crm)
 
     # Processes
+    def process_email_campaign_replies(self, msg):
+        """Analyse reply to email campain and takes appropriate action"""
+        # self.log(f"Processing email campaign reply: {msg}")
+        # Steps when action accounts is ACCEPT
+        account = next((a for a in self.crm.agents['account'] if a.uid == msg['suid']), None)
+        if account:
+            if msg['action'] == Actions.ACCEPT.value:
+                # Retrieve account from its suid
+                # account = self.crm.agents['account'].get(msg['suid'])
+                self.log(f"Transitioning {account.name} to SQL")
+                account.transition(fr=AccountStage.MQL, to=AccountStage.SQL)
+                self.crm.assign_salesrep(account)
+            elif msg['action'] == Actions.REJECT.value:
+                self.log(f"{account.name} rejected the email, no transition")
+            
+        yield self.env.timeout(0)
+ 
     def send_email_campaign(self):
         while True:
             targetted = self.pick_targetted_accounts()
-            # self.log(f"{len(targetted)} accounts targetted for email campaign")
+            msg = {
+                'suid': self.uid,
+                'intent': MktgIntents.EMAIL_CAMPAIGN.value,
+                'action': Actions.REQUEST.value,
+            }
             for account in targetted:
-                yield account.inbox.put('email campaign')
-                self.record_crm_transaction(
-                    initiator_uid=self.uid, 
-                    recipient_uid=account.uid, 
-                    msg=self.msgs.EMAIL_CAMPAIGN.value,
-                    type_trans='External')
-                # self.log(f"Sent email targeting {account.name}")
+                msg.update(ruid=account.uid)
+                yield account.inbox.put(json.dumps(msg))
+                self.crm.record_transaction(msg, transaction_type='external')
             time_to_next_campaign = self.compute_time_to_next_campaign()
-            # self.log(f"Next campaign at {self.env.now + time_to_next_campaign:.2f}")
+            self.log(f"Next campaign at {self.env.now + time_to_next_campaign:.2f}")
             yield self.env.timeout(time_to_next_campaign)
 
+    # Utility functions
     def pick_targetted_accounts(self):
-        mql = self.get_mql_accounts()
+        nb_accts = self.marketing_parameters[MktgIntents.EMAIL_CAMPAIGN.value]['nb_targetted_accounts']
+        mql = self.crm.get_accounts(stage=AccountStage.MQL)
         nb_mql = len(mql)
         self.log(f"Found {nb_mql} MQL accounts")
-        return random.sample(mql, min(self.nb_targetted_accounts,nb_mql))
+        return random.sample(mql, min(nb_accts, nb_mql))
 
     def compute_time_to_next_campaign(self):
         """Compute the time in weeks to the next campaign"""
-        return int(52 / max(self.nb_yearly_campaigns, 1))
+        n = self.marketing_parameters[MktgIntents.EMAIL_CAMPAIGN.value]['nb_yearly_campaigns']
+        return int(52 / max(n, 1))
 
-    def check_inbox(self):
-        while True:
-            # Receive confirmation from account
-            msg = yield self.inbox.get()
-            self.log(f"Received message: {msg}")
-            uid, msg = msg.split('|||')
-            self.record_crm_transaction(
-                initiator_uid=uid, 
-                recipient_uid=self.uid, 
-                msg=msg,
-                type_trans='External'
-                )
-            if msg in list(self.msg2stages.keys()):
-                mql = self.get_mql_accounts()
-                loa = [a for a in mql if a.uid == uid]
-                account = loa[0] if loa else None
-                if account:
-                    account.stage = AccountStage.SQL
-                    self.log(f"Converted {account.name} to {account.stage.name} stage")
-                    self.assign_salesrep(account)
-                    self.record_crm_transaction(
-                        initiator_uid=self.uid, 
-                        recipient_uid=uid, 
-                        msg=self.intmsgs.MQL2SQL.name,
-                        type_trans='Internal'
-                        )
+    @property
+    def name(self) -> str: return self._name
 
-    # Reporting and Stats
-    def record_crm_transaction(self, initiator_uid, recipient_uid, msg, type_trans, **kwargs):
-        """Record a transaction in the environment system."""
-        record = {
-            'timestamp': self.env.now,
-            'initiator': initiator_uid,
-            'recipient': recipient_uid,
-            'message': msg,
-            'type': type_trans,
-        }
-        record.update(kwargs)
-        if hasattr(self.env, 'crm_transactions'):
-            self.env.crm_transactions.append(record)    # type: ignore
-        else:
-            self.env.crm_transactions = [record]  # type: ignore
+    @property
+    def uid(self) -> str: return self._uid
 
-    def log(self, msg):
-        print(f"[{self.env.now:.2f}] {self.name}: {msg}")
+    @property
+    def process_map(self) -> Dict[str, Callable]:
+        """Map of "intent" to process functions"""
+        return self._process_map
+
+    @property
+    def loprocesses(self) -> List[Tuple[Callable, Dict]]:
+        """List of processes available in this agent
+
+        each process is defined as a tuple of (function, kwargs)
+        """
+        return [(self.send_email_campaign, {})]
 
 
-class SalesRep:
-    """simpy agent representing a Sales Representative
+class SalesRep(BaseAgent):
 
-    controls following processes:
-    - reviewing user needs of assigned accounts in SQL stage
-    - sending request for presentations to assigned accounts in PROSPECT stage
-    - sending bids to assigned accounts in PITCHED stage
-    - holds contract negotiation  to assigned accounts in BIDDED stage
-    - checking inbox for messages from accounts, updating account stages
-    """
+    _category = 'salesrep'
 
-    msgs = SalesRepMessages
-    reject = SalesRejectionMessages
-    intmsgs = InternalMessages
-
-    msg2stages = {
-        msgs.USER_NEED.value: AccountStage.PROSPECT,
-        reject.USER_NEED.value: AccountStage.SQL,
-        msgs.PRESENTATION.value: AccountStage.PITCHED,
-        reject.PRESENTATION.value: AccountStage.PROSPECT,
-        msgs.BID.value: AccountStage.BIDDED,
-        reject.BID.value: AccountStage.PROSPECT,
-        msgs.CONTRACT_NEGO.value: AccountStage.SIGNED,
-        reject.CONTRACT_NEGO.value: AccountStage.SQL,
-        OpsMessages.PROJECT_POSITIVE.value: AccountStage.ACTIVE,
-        OpsMessages.PROJECT_NEGATIVE.value: AccountStage.STALE,
-    }
-    
-    def __init__(self, env, name):
-        self.env = env
-        self.name = name
-        self.uid = 'srep-' + str(uuid4())
-        self.created = env.now
-        self.inbox = simpy.Store(env)
+    def __init__(self, crm, name):
+        self._name = name
+        self._uid = 'srep-' + str(uuid4())
         self.assigned_accounts = []
-        self.wkly_review_needs = 10
-        self.wkly_request_for_presentation = 5
-        self.wkly_request_for_bid = 5
-        self.wkly_negotiation = 3
+
+        # Define process parameters   
+        self._process_map = {
+            SalesIntents.USER_NEED.value: self.process_sales_request_replies,
+            SalesIntents.PRESENTATION.value: self.process_sales_request_replies,
+            SalesIntents.BID.value: self.process_sales_request_replies, 
+            SalesIntents.NEGO.value: self.process_sales_request_replies,    
+            OpsIntents.FEEDBACK_AT_COMPLETION.value: self.process_sales_request_replies,
+        }
+        self._loprocesses = [
+            (self.request_user_need_discovery, None),
+            (self.request_meeting_for_presentation, None),
+            (self.request_invitation_to_bid, None), 
+            (self.request_negotiation, None),
+            (self.request_project_feedback, None),
+        ]
+        super().__init__(crm)
+
+        self.wkly_review_needs = 2
+        self.wkly_request_for_presentation = 2
+        self.wkly_request_for_bid = 2
+        self.wkly_request_for_nego = 2
         self.wkly_completion_handover = 2
-        # Register processes
-        self.env.process(self.review_user_need())
-        self.env.process(self.meeting_request_for_presentation())
-        self.env.process(self.bid_request())
-        self.env.process(self.contract_negotiation())
-        self.env.process(self.completion_signoff())
-        self.env.process(self.check_inbox())
-        # Register this sales rep in the environment
-        if hasattr(self.env, 'salesreps'): 
-            self.env.salesreps.append(self)
-        else:
-            self.env.salesreps = [self]
 
-    def get_accounts_per_stage(self):
-        acct_per_stage = {k: [a for a in self.assigned_accounts if a.stage == k] for k in list(AccountStage)}
-        return acct_per_stage
-
-    def review_user_need(self):
+    # Intent Handlers
+    def request_user_need_discovery(self):
         """Attempt to review user needs of assigned accounts in SQL stage
 
         Account will react or not, and will progress to PROSPECT accordingly
         """
         while True:
-            sql = self.get_accounts_per_stage()[AccountStage.SQL]
-            nb_sql = len(sql)
-            # self.log(f"sql: {nb_sql}, {[a.name for a in sql]}")
-            targetted = random.sample(sql,min(nb_sql, self.wkly_review_needs))
+            ref_stage = AccountStage.SQL
+            self.log(f"queue: {sorted([a.name for a in self.crm.requests_in_progress])}")
+            # self.log(f"Entering 'request_user_need_discovery' for {self.wkly_review_needs} accounts")
+            accts = [a for a in self.crm.accounts_per_stage(ref_stage) if a not in self.crm.requests_in_progress]
+            nb_accts = len(accts)
+            self.log(f"{ref_stage.name}: {nb_accts}, {[a.name for a in accts]}")
+            targetted = random.sample(accts,min(nb_accts, self.wkly_review_needs))
+            # queue targetted accounts to avoid sending them a new request before their reply
+            self.crm.requests_in_progress.extend(targetted)
+            self.log(f"Added to queue: {sorted([a.name for a in targetted])}")
             for account in targetted:
-                msg = self.msgs.USER_NEED.value
-                yield account.inbox.put(msg)
-                self.record_crm_transaction(
-                    initiator_uid=self.uid, 
-                    recipient_uid=account.uid, 
+                msg = {
+                    'suid': self.uid,
+                    'ruid': account.uid,
+                    'intent': SalesIntents.USER_NEED.value,
+                    'action': Actions.REQUEST.value,
+                }
+                yield account.inbox.put(json.dumps(msg))
+                self.crm.record_transaction(
                     msg=msg,
-                    type_trans='External',
+                    transaction_type='External',
                     )
-                self.log(f"Sent {msg} for {account.name} ({account.uid})")
+                self.log(f"Sent to {account.name}: {msg})")
             time_to_next_week = self.env.now - int(self.env.now) + 1
             yield self.env.timeout(time_to_next_week) 
 
-    def meeting_request_for_presentation(self):
-        """Send a request for presentation to accounts in PROSPECT stage
-       
-        Account will accept or not, and will progress to PITCHED accordingly
-        """
+    def request_meeting_for_presentation(self):
+        """Attempt to get a pitch presentation at PROSPECT and ACTIVE accounts"""
         while True:
-            accts = self.get_accounts_per_stage()[AccountStage.PROSPECT]
-            nb_a = len(accts)
-            # self.log(f"accts: {nb_a}, {[a.name for a in accts]}")
-            targetted = random.sample(accts,min(nb_a, self.wkly_request_for_presentation))
+            ref_stage = AccountStage.PROSPECT
+            # self.log(f"Entering 'request_user_need_discovery' for {self.wkly_review_needs} accounts")
+            accts = [a for a in self.crm.accounts_per_stage(ref_stage) if a not in self.crm.requests_in_progress]
+            accts = accts + self.crm.accounts_per_stage(AccountStage.ACTIVE)
+            nb_accts = len(accts)
+            self.log(f"{ref_stage.name}: {nb_accts}, {[a.name for a in accts]}")
+            targetted = random.sample(accts,min(nb_accts, self.wkly_request_for_presentation))
+            # queue targetted accounts to avoid sending them a new request before their reply
+            self.crm.requests_in_progress.extend(targetted)
+            self.log(f"Added to queue: {sorted([a.name for a in targetted])}")
             for account in targetted:
-                msg = self.msgs.PRESENTATION.value
-                yield account.inbox.put(msg)
-                self.record_crm_transaction(
-                    initiator_uid=self.uid, 
-                    recipient_uid=account.uid, 
+                msg = {
+                    'suid': self.uid,
+                    'ruid': account.uid,
+                    'intent': SalesIntents.PRESENTATION.value,
+                    'action': Actions.REQUEST.value,
+                }
+                yield account.inbox.put(json.dumps(msg))
+                self.crm.record_transaction(
                     msg=msg,
-                    type_trans='External',
+                    transaction_type='External',
                     )
-                self.log(f"Sent {msg} for {account.name} ({account.uid})")
+                self.log(f"Sent to {account.name}: {msg})")
+            time_to_next_week = self.env.now - int(self.env.now) + 1
+            yield self.env.timeout(time_to_next_week) 
+                
+    def request_invitation_to_bid(self):
+        while True:
+            ref_stage = AccountStage.PITCHED
+            # self.log(f"Entering 'request_user_need_discovery' for {self.wkly_review_needs} accounts")
+            accts = [a for a in self.crm.accounts_per_stage(ref_stage) if a not in self.crm.requests_in_progress]
+            nb_accts = len(accts)
+            self.log(f"{ref_stage.name}: {nb_accts}, {[a.name for a in accts]}")
+            targetted = random.sample(accts,min(nb_accts, self.wkly_request_for_bid))
+            # queue targetted accounts to avoid sending them a new request before their reply
+            self.crm.requests_in_progress.extend(targetted)
+            self.log(f"Added to queue: {sorted([a.name for a in targetted])}")
+            for account in targetted:
+                msg = {
+                    'suid': self.uid,
+                    'ruid': account.uid,
+                    'intent': SalesIntents.BID.value,
+                    'action': Actions.REQUEST.value,
+                }
+                yield account.inbox.put(json.dumps(msg))
+                self.crm.record_transaction(
+                    msg=msg,
+                    transaction_type='External',
+                    )
+                self.log(f"Sent to {account.name}: {msg})")
             time_to_next_week = self.env.now - int(self.env.now) + 1
             yield self.env.timeout(time_to_next_week) 
 
-    def bid_request(self):
-        """Send a bid to accounts in PITCHED stage
-
-        Account will accept or not, and will progress to BIDDED accordingly
-        """
+    def request_negotiation(self):
         while True:
-            accts = self.get_accounts_per_stage()[AccountStage.PITCHED]
-            nb_a = len(accts)
-            # self.log(f"prospects: {nb_a}, {[a.name for a in accts]}")
-            targetted = random.sample(accts,min(nb_a, self.wkly_request_for_bid))
+            ref_stage = AccountStage.BIDDED
+            # self.log(f"Entering 'request_user_need_discovery' for {self.wkly_review_needs} accounts")
+            accts = [a for a in self.crm.accounts_per_stage(ref_stage) if a not in self.crm.requests_in_progress]
+            nb_accts = len(accts)
+            self.log(f"{ref_stage.name}: {nb_accts}, {[a.name for a in accts]}")
+            targetted = random.sample(accts,min(nb_accts, self.wkly_request_for_nego))
+            # queue targetted accounts to avoid sending them a new request before their reply
+            self.crm.requests_in_progress.extend(targetted)
+            self.log(f"Added to queue: {sorted([a.name for a in targetted])}")
             for account in targetted:
-                msg = self.msgs.BID.value
-                yield account.inbox.put(msg)
-                self.record_crm_transaction(
-                    initiator_uid=self.uid, 
-                    recipient_uid=account.uid, 
+                msg = {
+                    'suid': self.uid,
+                    'ruid': account.uid,
+                    'intent': SalesIntents.NEGO.value,
+                    'action': Actions.REQUEST.value,
+                }
+                yield account.inbox.put(json.dumps(msg))
+                self.crm.record_transaction(
                     msg=msg,
-                    type_trans='External',
+                    transaction_type='External',
                     )
-                self.log(f"Sent {msg} for {account.name} ({account.uid})")
+                self.log(f"Sent to {account.name}: {msg})")
             time_to_next_week = self.env.now - int(self.env.now) + 1
             yield self.env.timeout(time_to_next_week) 
 
-    def contract_negotiation(self):
-        """Hold bid and contract negotiation request to accounts in BIDDED stage
-
-        Account will award project or not, and will progress to SIGNED accordingly
-        """
+    def request_project_feedback(self):
         while True:
-            accts = self.get_accounts_per_stage()[AccountStage.BIDDED]
-            nb_a = len(accts)
-            # self.log(f"prospects: {nb_a}, {[a.name for a in accts]}")
-            targetted = random.sample(accts,min(nb_a, self.wkly_request_for_bid))
+            ref_stage = AccountStage.SIGNED
+            # self.log(f"Entering 'request_user_need_discovery' for {self.wkly_review_needs} accounts")
+            accts = [a for a in self.crm.accounts_per_stage(ref_stage) if a not in self.crm.requests_in_progress]
+            nb_accts = len(accts)
+            self.log(f"{ref_stage.name}: {nb_accts}, {[a.name for a in accts]}")
+            targetted = random.sample(accts,min(nb_accts, self.wkly_completion_handover))
+            # queue targetted accounts to avoid sending them a new request before their reply
+            self.crm.requests_in_progress.extend(targetted)
+            self.log(f"Added to queue: {sorted([a.name for a in targetted])}")
             for account in targetted:
-                msg = self.msgs.CONTRACT_NEGO.value
-                yield account.inbox.put(msg)
-                self.record_crm_transaction(
-                    initiator_uid=self.uid, 
-                    recipient_uid=account.uid, 
+                msg = {
+                    'suid': self.uid,
+                    'ruid': account.uid,
+                    'intent': OpsIntents.FEEDBACK_AT_COMPLETION.value,
+                    'action': Actions.REQUEST.value,
+                }
+                yield account.inbox.put(json.dumps(msg))
+                self.crm.record_transaction(
                     msg=msg,
-                    type_trans='External',
+                    transaction_type='External',
                     )
-                self.log(f"Sent {msg} for {account.name} ({account.uid})")
+                self.log(f"Sent to {account.name}: {msg})")
             time_to_next_week = self.env.now - int(self.env.now) + 1
             yield self.env.timeout(time_to_next_week) 
 
-    def completion_signoff(self):
-        """Hold review of the project implementation for project in the SIGNED stage
-
-        Account will award project or not, and will progress to ACTIVE or STALE accordingly
-        """
-        while True:
-            accts = self.get_accounts_per_stage()[AccountStage.SIGNED]
-            nb_a = len(accts)
-            # self.log(f"accts: {nb_a}, {[a.name for a in accts]}")
-            targetted = random.sample(accts,min(nb_a, self.wkly_completion_handover))
-            for account in targetted:
-                msg = OpsMessages.PROJECT_FEEDBACK.value
-                yield account.inbox.put(msg)
-                self.record_crm_transaction(
-                    initiator_uid=self.uid, 
-                    recipient_uid=account.uid, 
-                    msg=msg,
-                    type_trans='External',
-                    )
-                # self.log(f"Sent {msg} for {account.name} ({account.uid})")
-            time_to_next_week = self.env.now - int(self.env.now) + 1
-            yield self.env.timeout(time_to_next_week) 
-
-    def check_inbox(self):
-        while True:
-            # Receive confirmation from accounts
-            msg = yield self.inbox.get()
-            uid, msg = msg.split('|||')
-            self.record_crm_transaction(
-                initiator_uid=uid, 
-                recipient_uid=self.uid, 
-                msg=msg,
-                type_trans='External'
-                )
-            if msg in list(self.msg2stages.keys()):
-                loa = [a for a in self.assigned_accounts if a.uid == uid]
-                account = loa[0] if loa else None
-                if account:
-                    if msg in self.expected_messages(account.stage):
-                        msg2send = getattr(self.intmsgs, f"{account.stage.name.upper()}2{self.msg2stages[msg].name}").name  # type: ignore
-                        self.log(f"Converting {account.name} from {account.stage.name} to {self.msg2stages[msg].name} stage")
-                        account.stage = self.msg2stages[msg]
-                        self.record_crm_transaction(
-                            initiator_uid=self.uid, 
-                            recipient_uid=account.uid, 
-                            msg=msg2send,
-                            type_trans='Internal'
-                            )
-
-    def record_crm_transaction(self, initiator_uid, recipient_uid, msg, type_trans, **kwargs):
-        """Record a transaction in the environment system."""
-        record = {
-            'timestamp': self.env.now,
-            'initiator': initiator_uid,
-            'recipient': recipient_uid,
-            'message': msg,
-            'type': type_trans
+    def process_sales_request_replies(self, msg):
+        """Analyse reply to sales request and takes appropriate further action"""
+        self.log(f"Processing reply to {msg['intent']}: {msg}")
+        # Steps when action accounts is ACCEPT
+        action_mapping = {
+            SalesIntents.USER_NEED.value: {
+                Actions.ACCEPT.value: (AccountStage.SQL, AccountStage.PROSPECT),
+                Actions.REJECT.value: (AccountStage.SQL, AccountStage.SQL),
+            },
+            SalesIntents.PRESENTATION.value: {
+                Actions.ACCEPT.value: (AccountStage.PROSPECT, AccountStage.PITCHED),
+                Actions.REJECT.value: (AccountStage.PROSPECT, AccountStage.SQL),
+            },
+            SalesIntents.BID.value: {
+                Actions.ACCEPT.value: (AccountStage.PITCHED, AccountStage.BIDDED),
+                Actions.REJECT.value: (AccountStage.PITCHED, AccountStage.SQL),
+            },
+            SalesIntents.NEGO.value: {
+                Actions.ACCEPT.value: (AccountStage.BIDDED, AccountStage.SIGNED),
+                Actions.REJECT.value: (AccountStage.BIDDED, AccountStage.SQL),
+            },
+            OpsIntents.FEEDBACK_AT_COMPLETION.value: {
+                # Actions.POSITIVE.value: (AccountStage.SIGNED, AccountStage.ACTIVE),
+                Actions.POSITIVE.value: (AccountStage.SIGNED, AccountStage.PROSPECT),
+                Actions.NEGATIVE.value: (AccountStage.SIGNED, AccountStage.STALE),
+            }
         }
-        record.update(kwargs)
-        if hasattr(self.env, 'crm_transactions'):
-            self.env.crm_transactions.append(record)    # type: ignore
-        else:
-            self.env.crm_transactions = [record]  # type: ignore
 
-    
-    def expected_messages(self, stage):
-        if stage == AccountStage.LEAD:
-            return []
-        elif stage == AccountStage.SQL:
-            return [SalesRepMessages.USER_NEED.value, SalesRejectionMessages.USER_NEED.value]
-        elif stage == AccountStage.PROSPECT:
-            return [SalesRepMessages.PRESENTATION.value, SalesRejectionMessages.PRESENTATION.value]
-        elif stage == AccountStage.PITCHED:
-            return [SalesRepMessages.BID.value, SalesRejectionMessages.BID.value]
-        elif stage == AccountStage.BIDDED:
-            return [SalesRepMessages.CONTRACT_NEGO.value, SalesRejectionMessages.CONTRACT_NEGO.value]
-        elif stage == AccountStage.SIGNED:
-            return [OpsMessages.PROJECT_POSITIVE.value, OpsMessages.PROJECT_NEGATIVE.value]
-        elif stage == AccountStage.ACTIVE:
-            return self.expected_messages(AccountStage.SQL)
-        else:
-            return []
-            
-    def __repr__(self):
-        return f"SalesRep(name={self.name} uid={self.uid})"
+        account = next((a for a in self.crm.agents['account'] if a.uid == msg['suid']), None)
+        if account:
+            intent, action = msg['intent'], msg['action']
+            fr,to = action_mapping[intent][action]
+            self.log(f"Transitioning {account.name} from {fr.name} to {to.name}")
+            account.transition(fr=fr, to=to)
+            self.crm.record_transaction(
+                msg={
+                    'suid': self.uid,
+                    'ruid': account.uid,
+                    'intent': f"{fr.name} to {to.name}",
+                    'action': 'transition',
+                },
+                transaction_type='internal',
+            )
+            self.crm.requests_in_progress.remove(account)
+            self.log(f"Removed {account.name} from queue, remaining: {sorted([a.name for a in self.crm.requests_in_progress])}")
 
-    def __call__(self) -> dict:
-        """Return a dictionary representation of the account."""
-        # ['assigned_accounts', 'created', 'env', 'inbox', 'msg2stages', 'name', 'uid', 'wkly_review_needs']
-        a2drop = ['env', 'inbox', 'msg2stages']
-        a2keep = []
-        attrs = [a for a in dir(self) if not a.startswith('_') and not callable(getattr(self, a))]
-        aoi = set(attrs).difference(set(a2drop)).union(set(a2keep))
-        return {a:getattr(self,a) for a in dir(self) if a in list(aoi)}
+        yield self.env.timeout(0)
 
-    def log(self, msg):
-        print(f"[{self.env.now:.2f}] {self.name}: {msg}")
+    @property
+    def name(self) -> str: return self._name
 
+    @property
+    def uid(self) -> str: return self._uid
 
-class Account:
-    """simpy agent representing an Account
+    @property
+    def process_map(self) -> Dict[str, Callable]: return self._process_map
 
-    controls following processes:
-    - checking inbox for messages from MarketingDpt and SalesRep
-    - sending confirmation messages to MarketingDpt and SalesRep
+    @property
+    def loprocesses(self) -> List[Tuple[Callable, Dict]]: return self._loprocesses 
+   
+
+class Account(BaseAgent):
+    """Account Agent
+
+    Outgoing processes:
+    - handle sales rep requests
+    - handle email campaign replies
     """
 
-    _counter_start = 0
-
-    @classmethod
-    def _counter(cls):
-        cls._counter_start += 1
-        return cls._counter_start
-
-    @classmethod
-    def reset_counter(cls):
-        cls._counter_start = 0
+    _category = 'account'
 
     mktg_conversion_rates = {
-        MarketingMessages.EMAIL_CAMPAIGN.value: 0.15,
-        MarketingMessages.INDUSTRY_EVENT.value: 0.3,
-        MarketingMessages.WEBSITE_CTA.value: 0.41 * 0.02
+        MktgIntents.EMAIL_CAMPAIGN.value: 0.5, # 0.15
+        MktgIntents.INDUSTRY_EVENT.value: 0.3,  # 0.3
     }
     mktg_conversion_delays = {
-        MarketingMessages.EMAIL_CAMPAIGN.value: .6, # one time step is one week
-        MarketingMessages.INDUSTRY_EVENT.value: .6,
-        MarketingMessages.WEBSITE_CTA.value: .2
+        MktgIntents.EMAIL_CAMPAIGN.value: .6, # one time step is one week
+        MktgIntents.INDUSTRY_EVENT.value: .6,
     }
     sales_conversion_rates = {
-        SalesRepMessages.USER_NEED.value: 0.8,    # 0.9
-        SalesRepMessages.PRESENTATION.value: 0.6, # 0.6
-        SalesRepMessages.BID.value: 0.6,
-        SalesRepMessages.CONTRACT_NEGO.value: 0.5 ,
-        SalesRejectionMessages.USER_NEED.value: 0.8,    # 0.9
-        SalesRejectionMessages.PRESENTATION.value: 0.6, # 0.6
-        SalesRejectionMessages.BID.value: 0.6,
-        SalesRejectionMessages.CONTRACT_NEGO.value: 0.5,
+        SalesIntents.USER_NEED.value: 0.8,    # 0.9
+        SalesIntents.PRESENTATION.value: 0.6, # 0.6
+        SalesIntents.BID.value: 0.6,
+        SalesIntents.NEGO.value: 0.5 ,
     }
     sales_conversion_delays = {
-        SalesRepMessages.USER_NEED.value: 1,
-        SalesRepMessages.PRESENTATION.value: 4 * 1,
-        SalesRepMessages.BID.value: 4 * 1,
-        SalesRepMessages.CONTRACT_NEGO.value: 4 * 2,
-        SalesRejectionMessages.USER_NEED.value: 1,
-        SalesRejectionMessages.PRESENTATION.value: 4 * 1,
-        SalesRejectionMessages.BID.value: 4 * 1,
-        SalesRejectionMessages.CONTRACT_NEGO.value: 4 * 2,
+        SalesIntents.USER_NEED.value: 0.3,
+        SalesIntents.PRESENTATION.value: 0.3,
+        SalesIntents.BID.value: 0.3,
+        SalesIntents.NEGO.value: 0.3,
     }
     ops_conversion_rates = {
-        OpsMessages.PROJECT_FEEDBACK.value: 1,
-        OpsMessages.PROJECT_POSITIVE.value: 0.95,
+        OpsIntents.FEEDBACK_AT_COMPLETION.value: 0.95,
     }
     ops_conversion_delays = {
-        OpsMessages.PROJECT_FEEDBACK.value: 4 * 3,
-        OpsMessages.PROJECT_POSITIVE.value: 4 * 3,
+        OpsIntents.FEEDBACK_AT_COMPLETION.value: 4 * 2,
     }
 
-    srmsg = SalesRepMessages
-    srrej = SalesRejectionMessages
-    
-    def __init__(self, env, name, marketing, **kwargs):
-        self.env = env
-        self.name = name
-        self.handle_kwargs(**kwargs)
-        self.uid = f"acct-{uuid4()}"
+    def __init__(self, crm, name, marketing, **kwargs):
+        """Initialize the Account Agent"""
+        self._name = name
+        self._uid = f"acct-{uuid4()}"
+        self.store_kwargs(**kwargs)
         self.stage = AccountStage.MQL
         self.marketing:MarketingDpt = marketing
         self.assigned_salesrep:SalesRep|None = None
-        self.inbox = simpy.Store(env)
-        # Register processes
-        self.env.process(self.check_inbox())
-        # Register account
-        if hasattr(self.env, 'accounts'): 
-            self.env.accounts.append(self)
-        else:
-            self.env.accounts = [self]
 
-        self.record_crm_transaction(
-            initiator_uid=self.marketing.uid,
-            recipient_uid=self.uid,
-            msg=f"NewMQL",
-            type_trans='Internal'
+        # Define process parameters        
+        self._loprocesses = []
+        self.account_parameters = {}
+        self._process_map = {
+            MktgIntents.EMAIL_CAMPAIGN.value: self.reply_to_email_campaign,
+            SalesIntents.USER_NEED.value: self.reply_to_salesrep_request,
+            SalesIntents.PRESENTATION.value: self.reply_to_salesrep_request,
+            SalesIntents.BID.value: self.reply_to_salesrep_request,
+            SalesIntents.NEGO.value: self.reply_to_salesrep_request, 
+            OpsIntents.FEEDBACK_AT_COMPLETION.value: self.reply_to_ops_request,
+        }
+
+        super().__init__(crm)
+
+    def reply_to_email_campaign(self, msg):
+        """Reply with an 'accept' or 'deny' action to the email campaign message"""
+        # self.log(f"Entering in 'reply_to_email_campaign' with {msg}")
+        if msg['action'] == Actions.REQUEST.value:
+            # Make decision whether to accept of deny
+            convrate = self.mktg_conversion_rates[MktgIntents.EMAIL_CAMPAIGN.value]
+            # self.log(f"Conversion Rate of {convrate}")
+            if random.random() <= convrate:
+                action = Actions.ACCEPT.value
+            else:
+                action = Actions.REJECT.value
+            # Build reply message
+            reply_msg = {
+                'suid': self.uid,
+                'ruid': msg['suid'],
+                'intent': MktgIntents.EMAIL_CAMPAIGN.value,
+                'action': action,
+            }
+            # Define the delay to reply
+            delay = self.mktg_conversion_delays[MktgIntents.EMAIL_CAMPAIGN.value]
+            self.log(f"Will reply to email at {self.env.now + delay} ({delay} weeks)")
+            yield self.env.timeout(delay)
+            # Send reply to marketing inbox
+            yield self.marketing.inbox.put(json.dumps(reply_msg))
+            self.crm.record_transaction(
+                msg=reply_msg,
+                transaction_type='external',
             )
+            # self.log(f"Replied to email campaign with {reply_msg}")
+        else:
+            yield self.env.timeout(0)
 
-    def handle_kwargs(self, **kwargs):
-        """Handle keyword arguments for account creation."""
+    def reply_to_salesrep_request(self, msg):
+        self.log(f"Received sales rep request: {msg}")
+        if msg['action'] == Actions.REQUEST.value:
+            convrate = self.sales_conversion_rates.get(msg['intent'], 0)
+
+            self.log(f"{convrate}")
+            if random.random() <= convrate:
+                reply_msg = {'suid': self.uid, 'ruid': msg['suid'], 'intent': msg['intent'], 'action': Actions.ACCEPT.value}
+            else:
+                reply_msg = {'suid': self.uid, 'ruid': msg['suid'], 'intent': msg['intent'], 'action': Actions.REJECT.value}
+
+            # Define the delay to reply
+            delay = self.sales_conversion_delays.get(msg['intent'], 0.0)
+            self.log(f"Will reply to email at {self.env.now + delay} ({delay} weeks)")
+            yield self.env.timeout(delay)
+
+            # Send reply to SalesRep inbox
+            srep = next(sr for sr in self.crm.agents['salesrep'] if sr.uid == msg['suid'])
+            yield srep.inbox.put(json.dumps(reply_msg))
+            self.crm.record_transaction(
+                msg=reply_msg,
+                transaction_type='external',
+            )
+            self.log(f"Replied to {msg['intent']} with {reply_msg}")
+        yield self.env.timeout(0)
+
+    def reply_to_ops_request(self, msg):
+        self.log(f"Received operation request: {msg}")
+        if msg['action'] == Actions.REQUEST.value:
+            convrate = self.ops_conversion_rates.get(msg['intent'], 0)
+            self.log(f"{convrate}")
+            if random.random() <= convrate:
+                reply_msg = {'suid': self.uid, 'ruid': msg['suid'], 'intent': msg['intent'], 'action': Actions.POSITIVE.value}
+            else:
+                reply_msg = {'suid': self.uid, 'ruid': msg['suid'], 'intent': msg['intent'], 'action': Actions.NEGATIVE.value}
+
+            # Define the delay to reply
+            delay = self.ops_conversion_delays.get(msg['intent'], 0.0)
+            self.log(f"Will reply to email at {self.env.now + delay} ({delay} weeks)")
+            yield self.env.timeout(delay)
+
+            # Send reply to SalesRep inbox
+            srep = next(sr for sr in self.crm.agents['salesrep'] if sr.uid == msg['suid'])
+            yield srep.inbox.put(json.dumps(reply_msg))
+            self.crm.record_transaction(
+                msg=reply_msg,
+                transaction_type='external',
+            )
+            self.log(f"Replied to {msg['intent']} with {reply_msg}")
+        yield self.env.timeout(0)
+
+    def transition(self, fr:AccountStage, to:AccountStage):
+        """Transition the account from one stage to another"""
+        if self.stage == fr:
+            self.log(f"Transitioning from {fr} to {to}")
+            self.stage = to
+            self.crm.record_transaction(
+                msg={
+                    'suid': self.crm.uid,
+                    'ruid': self.uid,
+                    'intent': f"{fr} to {to}",
+                    'action': 'transition',
+                },
+                transaction_type='system',
+            )
+        else:
+            err = f"{self.name} cannot transition from {self.stage} to {to}, expected {fr}"
+            err = err + f"\n{self.stage} {self.uid}"
+            raise ValueError(err)
+        
+    def store_kwargs(self, **kwargs):
+        """Store keyword arguments for account creation."""
         self.country = kwargs.get("country", Country.EU)
         if isinstance(self.country, str):
             self.country = getattr(Country, self.country, Country.EU)
@@ -487,127 +649,19 @@ class Account:
         self.account_type = kwargs.get("account_type", random.choice(list(AccountType)))
         self.lead_source = kwargs.get("lead_source", LeadSource.WEBSITE_CTA)
 
-    def random_delay(self, event_name):
-        low, high = 1,3
-        return random.uniform(low, high)
+    @property
+    def name(self) -> str: return self._name
 
-    def decide(self, conversion_rates, key):
-        srm = SalesRepMessages
-        srr = SalesRejectionMessages
-        c = Country
-        i = Industry
-        t = AccountType
-        sales_conversion_delta = {
-            MarketingMessages.EMAIL_CAMPAIGN.value:{},
-            srm.USER_NEED.value: {c.CN.name: 0.75, c.EU.name: 1.25},
-            srm.PRESENTATION.value: {i.ConsumerGoods.name: 1.25, i.Pharmaceuticals.name: 1.75, i.FoodnBeverage.name: 1.5, i.AutomotiveParts.name:0.5},
-            srm.BID.value: {i.ConsumerGoods.name: 1.25, i.Pharmaceuticals.name: 1.75, i.FoodnBeverage.name: 1.5, i.AutomotiveParts.name:0.5},
-            srm.CONTRACT_NEGO.value: {c.CN.name: 0.75, c.EU.name: 1.1},
-            srr.USER_NEED.value: {},
-            srr.PRESENTATION.value: {},
-            srr.BID.value: {},
-            srr.CONTRACT_NEGO.value: {},
-        }
-        ctry = self.country.name
-        ind = self.industry.name
-        factor_1 = sales_conversion_delta[key].get(ctry,1.)
-        factor_2 = sales_conversion_delta[key].get(ind,1.)
-        return random.random() <= conversion_rates[key] * factor_1 * factor_2
+    @property
+    def uid(self) -> str: return self._uid
 
-    def check_inbox(self):
-        while True:
-            msg = yield self.inbox.get()
-            # self.log(f"{self.name} received message: {msg}")
-            if msg in list(self.mktg_conversion_rates.keys()):
-                # self.log(f"Conversion rate: {self.mktg_conversion_rates[msg]}")
-                if self.decide(self.mktg_conversion_rates, msg):                    
-                    yield self.env.timeout(self.mktg_conversion_delays[msg])
-                    # self.log(f"Processing marketing message: {msg}")
-                    self.marketing.inbox.put(f"{self.uid}|||{msg}")                    
-            elif msg in list(self.sales_conversion_rates.keys()):
-                # self.log(f"Conversion rate: {self.sales_conversion_rates[msg]}")
-                delay = self.sales_conversion_delays[msg]
-                if self.decide(self.sales_conversion_rates, msg):
-                    # pick the received message to send back
-                    # self.log(f"{self.name} accepts {msg}")
-                    pass
-                else:
-                    # pick the corresponding rejecting message to send back
-                    msg = getattr(self.srrej, self.srmsg(msg).name).value
-                    # self.log(f"{self.name} rejects {msg}")
-                if self.assigned_salesrep:
-                    yield self.env.timeout(delay)
-                    # self.log(f"Processing sales message: {msg}")
-                    # self.log(f"{self.uid}|||{msg}")
-                    self.assigned_salesrep.inbox.put(f"{self.uid}|||{msg}")
-                else:
-                    raise RuntimeError(f"No sales rep assigned for {self.name}, cannot send message {msg}")
-            elif msg in list(self.ops_conversion_rates.keys()):
-                if self.decide(self.ops_conversion_rates, msg):
-                    msg = OpsMessages.PROJECT_POSITIVE.value
-                    self.log(f"+++++++++++++++++++++++++++++++++++++++++ {self.uid}|||{msg}")
-                else:
-                    msg = OpsMessages.PROJECT_NEGATIVE.value
-                    self.log(f"----------------------------------------- {self.uid}|||{msg}")
-                if self.assigned_salesrep:
-                    yield self.env.timeout(self.ops_conversion_delays[msg])
-                    self.log(f"OPSSSSSSSSSS {self.uid}|||{msg}")
-                    self.assigned_salesrep.inbox.put(f"{self.uid}|||{msg}")
-                else:
-                    raise RuntimeError(f"No sales rep assigned for {self.name}, cannot send message {msg}")
-            else:
-                self.log(f"Unknown message type: {msg}")
+    @property
+    def loprocesses(self): return self._loprocesses
 
-    def log(self, msg):
-        print(f"[{self.env.now:.2f}] {self.name}: {msg}")
+    @property
+    def process_map(self): return self._process_map
 
-    def __repr__(self):
-        return f"Account(name={self.name} uid={self.uid})"
 
-    def __call__(self) -> dict:
-        """Return a dictionary representation of the account."""
-        a2drop = ['env', 'inbox', 'marketing', 'mktg_conversion_rates', 'mktg_conversion_delays',  'sales_conversion_delays', 'sales_conversion_rates']
-        a2keep = ['assigned_salesrep']
-        attrs = [a for a in dir(self) if not a.startswith('_') and not callable(getattr(self, a))]
-        aoi = set(attrs).difference(set(a2drop)).union(set(a2keep))
-        return {a:getattr(self,a) for a in dir(self) if a in list(aoi)}
-
-    def record_crm_transaction(self, initiator_uid, recipient_uid, msg, type_trans, **kwargs):
-        """Record a transaction in the environment system."""
-        record = {
-            'timestamp': self.env.now,
-            'initiator': initiator_uid,
-            'recipient': recipient_uid,
-            'message': msg,
-            'type': type_trans,
-        }
-        record.update(kwargs)
-        if hasattr(self.env, 'crm_transactions'):
-            self.env.crm_transactions.append(record)    # type: ignore
-        else:
-            self.env.crm_transactions = [record]  # type: ignore
-
-def record_accounts_stats(env):
-        """Record the number of accounts per stage in the environment."""
-        while True:
-            yield env.timeout(delay=1)
-            record = {
-                'timestamp': env.now,
-                'nb_accounts': len(env.accounts),
-                'LEAD': len([a for a in env.accounts if a.stage == AccountStage.LEAD]),
-                'MQL': len([a for a in env.accounts if a.stage == AccountStage.MQL]),
-                'SQL': len([a for a in env.accounts if a.stage == AccountStage.SQL]),
-                'PROSPECT': len([a for a in env.accounts if a.stage == AccountStage.PROSPECT]),
-                'PITCHED': len([a for a in env.accounts if a.stage == AccountStage.PITCHED]),
-                'BIDDED': len([a for a in env.accounts if a.stage == AccountStage.BIDDED]),
-                'SIGNED': len([a for a in env.accounts if a.stage == AccountStage.SIGNED]),
-                'ACTIVE': len([a for a in env.accounts if a.stage == AccountStage.ACTIVE]),
-                'STALE': len([a for a in env.accounts if a.stage == AccountStage.STALE]),
-            }
-            if hasattr(env, 'account_stats'):
-                env.account_stats.append(record)
-            else:
-                env.account_stats = [record]  
 
 def accounts_created_before(t, env):
     return [acc for acc in env.accounts if acc.created_at <= t]
@@ -628,15 +682,5 @@ def periodic_reporter(env, interval):
         yield env.timeout(interval)
         report_account_stages(env)
 
-# Run simulation
-def main():
-    random.seed(1988)
-    env = simpy.Environment()
-    env.accounts = []   # List to hold all accounts # type: ignore
-    initial_accounts = 5
-    arrival_rate = 0.5  # on average, one new account every 2 units of time
-    # env.process(account_arrival(env, initial_accounts, arrival_rate))
-    env.run(until=20)
-
 if __name__ == "__main__":
-    main()
+    pass

@@ -6,53 +6,59 @@ import random
 import seaborn as sns   
 import simpy
 
-from agents import MarketingDpt, SalesRep, Account, record_accounts_stats
-from datetime import datetime, timedelta
-from enums import AccountStage, AccountType, LeadSource
-from utils import salesrep_name_generator, account_info_generator
-
+from eccore.core import setup_logging, logthis
 from pathlib import Path
+from typing import Dict, List, Optional, Sequence, Tuple
 from uuid import uuid4
 
-from agents import MarketingDpt, SalesRep, Account, record_accounts_stats
-from enums import AccountStatus, AccountType, AccountStage, Country, Industry
-from enums import LeadSource
-from enums import MarketingMessages, SalesRepMessages
-from utils import account_info_generator, salesrep_name_generator
+from agents import BaseAgent, MarketingDpt, SalesRep, Account
+from datetime import datetime, timedelta
+from enums import AccountStatus, AccountType, AccountStage, Country, Industry, LeadSource
+from enums import MktgIntents, SalesIntents, Actions
+from utils import salesrep_name_generator, account_info_generator
 
 
 class CustomerRelationManagerSimulator:
-    def __init__(self, nb_salesreps=5, nb_mql_accounts=20, nb_sql_accounts=20):
+
+    def __init__(self,nb_salesreps=5, nb_mql=20, nb_sql=20, nb_others=15):
+        self.name = 'CRMSim'
+        self.uid = 'crm-' + str(uuid4())
         self.env = simpy.Environment()
-        self.env.sales_reps = []  # type: ignore
-        self.env.accounts = []   # type: ignore
-        self.marketing = MarketingDpt(self.env)
-        self.salesrep_name_gen = salesrep_name_generator()
+        self.time_step_unit = 'Week'
+        self.agents:Dict[str, List[Account|SalesRep|MarketingDpt]] = {} # List of Agents, dict with key as agent types and value as lists
+        self.requests_in_progress = [] # queue where accounts with pending request are stored
+
+        self.transactions = []
+
+        self.marketing = MarketingDpt(self)
+        self.salesrep_name_gen = salesrep_name_generator() # initialise salesrep name generator
         self.setup_salesreps(nb_salesreps)
         self.account_info_gen = account_info_generator()
-        self.setup_accounts(nb_mql_accounts, nb_sql_accounts)
+        self.setup_accounts(nb_mql, nb_sql, nb_others)
 
-        self.env.process(self.new_mql_arrival(arrival_rate=0.25)) # MQL arrival rate
-        self.env.process(record_accounts_stats(self.env))
+        
+        self.loprocesses = [] # List of all processes at the top level in the CRM
+        self.register_processes()
+        self.env.process(self.record_accounts_stats())  # Positionel last to ensure it is the last action
 
+
+    # =============================================================================
     # Methods to setup the simulation
+    # =============================================================================
     def setup_salesreps(self, nb_salesreps):
         """Initialize sales reps."""
-        if len(self.env.sales_reps) > 0: # type: ignore
+
+        salesreps = self.agents.get('salesrep', [])
+        if len(salesreps) > 0:
             return
         else:
             for _ in range(nb_salesreps):
-                salesrep = SalesRep(self.env, next(self.salesrep_name_gen))
-                self.add_salesrep(salesrep)
-
-    def setup_accounts(self, nb_mql_accounts, nb_sql_accounts, nb_others=15):
+                SalesRep(crm=self, name=next(self.salesrep_name_gen))
+                
+    def setup_accounts(self, nb_mql, nb_sql, nb_others=15):
         """Initialize accounts."""
-        nb_mql = int(nb_mql_accounts)
-        nb_sql = int(nb_sql_accounts)
-        nb_prospects = int(nb_others)
-        nb_pitched = int(nb_others * .80)
-        nb_bidded = int(nb_others * .66)
-        nb_signed = int(nb_others * .35)
+        nb_mql, nb_sql = int(nb_mql), int(nb_sql)
+        nb_prospects, nb_pitched, nb_bidded, nb_signed = int(nb_others),int(nb_others*.80),int(nb_others*.66),int(nb_others*.35)
         if nb_mql > 0:
             for i,_ in enumerate(range(nb_mql)):
                 self.add_account(stage=AccountStage.MQL)
@@ -77,17 +83,13 @@ class CustomerRelationManagerSimulator:
             for i,_ in enumerate(range(nb_signed)):
                 self.add_account(stage=AccountStage.SIGNED)
             print(f"Created {nb_signed} SIGNED accounts")
-        print(f"Total accounts created: {len(self.env.accounts)}")  # type: ignore
-
-    # Methods to manage accounts and sales reps
-    def add_salesrep(self, salesrep):
-        self.env.sales_reps.append(salesrep)  # type: ignore
+        print(f"Total accounts created: {len(self.get_accounts())}")  # type: ignore
 
     def add_account(self, stage, **kwargs):
         co_info = next(self.account_info_gen)
-        sales_rep_loop = itertools.cycle(self.env.sales_reps) # type: ignore
+        sales_rep_loop = itertools.cycle(self.get_salesreps())
         account = Account(
-            self.env, 
+            crm=self, 
             name=co_info['Company Name'],
             marketing=self.marketing,
             country=co_info['Country'],
@@ -96,99 +98,145 @@ class CustomerRelationManagerSimulator:
             lead_source=kwargs.get('lead_source', random.choice(list(LeadSource))),
             )
         account.stage = stage
-        if stage == AccountStage.SQL:
+        if stage != AccountStage.LEAD:
             account.assigned_salesrep = next(sales_rep_loop)
-        # print(f"[{self.env.now:.2f}]: Account {account.name} added to CRM ({len(self.env.accounts)}).")
+        # self.log(self.env, self, f"Account {account.name} added to CRM (total of {len(self.get_accounts())} accounts).")
 
-    # Processes
-    def new_mql_arrival(self, arrival_rate):
+    # =============================================================================
+    # CRM related methods
+    # =============================================================================
+    def get_accounts(self, stage:Optional[AccountStage]=None) -> List[Account]:
+        if stage is None:
+            return [a for a in self.agents.get('account', [])] # type: ignore
+        else:
+            return [acct for acct in self.agents.get('account', []) if acct.stage == stage] # type: ignore
+
+    def get_salesreps(self) -> List[SalesRep]:
+        return self.agents.get('salesrep', []) # type: ignore
+
+    def assign_salesrep(self, account:Account):
+        """Assign a sales rep to an account."""
+        salesreps = self.get_salesreps()
+        if not salesreps:
+            raise ValueError("No sales reps available to assign.")
+        # Assign the first available sales rep
+        selected_salerep = sorted(salesreps, key=lambda sr: len(sr.assigned_accounts))[0]
+        account.assigned_salesrep = selected_salerep
+        self.log(f"Assigned sales rep {selected_salerep.name} to account {account.name}", selected_salerep, self.env)
+        self.record_transaction(
+            msg={
+                'suid': selected_salerep.uid,
+                'ruid': account.uid,
+                'intent': 'assign sales rep',
+                'action': 'assign',
+            },
+            transaction_type='system',
+        )
+
+    def register_agent_to_crm(self, agent, category): 
+        """Adds this agent to the collection stored in crm"""
+        self.agents.setdefault(category, []).append(agent)
+
+    # =============================================================================
+    # CRM reporting methods
+    # =============================================================================
+    def record_transaction(self, msg, transaction_type, **kwargs):
+        """Record a transaction in the environment system."""
+        record = {
+            'timestamp': self.env.now,
+            'sender': msg['suid'],
+            'reviever': msg['ruid'],
+            'intent': msg['intent'],
+            'action': msg.get('action', None),
+            'type': transaction_type,
+        }
+        record.update(kwargs)
+        if hasattr(self, 'transactions'):
+            self.transactions.append(record)    
+        else:
+            self.transactions = [record]  
+
+    def record_accounts_stats(self):
+        """Record the number of accounts per stage in the environment."""
         while True:
-            delay = random.expovariate(arrival_rate)
-            t = self.env.now + delay
-            yield self.env.timeout(delay)
-            self.add_account(stage=AccountStage.MQL)
+            yield self.env.timeout(delay=1)
+            record = {
+                'timestamp': self.env.now,
+                'nb_accounts': len(self.agents['account']),
+                'LEAD': len([a for a in self.agents['account'] if a.stage == AccountStage.LEAD]), # type: ignore
+                'MQL': len([a for a in self.agents['account'] if a.stage == AccountStage.MQL]), # type: ignore
+                'SQL': len([a for a in self.agents['account'] if a.stage == AccountStage.SQL]), # type: ignore
+                'PROSPECT': len([a for a in self.agents['account'] if a.stage == AccountStage.PROSPECT]), # type: ignore
+                'PITCHED': len([a for a in self.agents['account'] if a.stage == AccountStage.PITCHED]), # type: ignore
+                'BIDDED': len([a for a in self.agents['account'] if a.stage == AccountStage.BIDDED]), # type: ignore
+                'SIGNED': len([a for a in self.agents['account'] if a.stage == AccountStage.SIGNED]), # type: ignore
+                'ACTIVE': len([a for a in self.agents['account'] if a.stage == AccountStage.ACTIVE]), # type: ignore
+                'STALE': len([a for a in self.agents['account'] if a.stage == AccountStage.STALE]), # type: ignore
+            }
+            if hasattr(self, 'account_stats'):
+                getattr(self, 'account_stats').append(record)
+            else:
+                self.account_stats = [record]
 
-    # Reporting and Plotting
-    def convert_lists_to_df(self):
-        salesrep_df = pd.DataFrame({sr.uid: sr() for sr in self.env.sales_reps})  # type: ignore
-        return salesrep_df.T
-
-    def get_crm_transactions(self):
-        """Get CRM transactions as a DataFrame."""
-        if hasattr(self.env, 'crm_transactions'):
-            return pd.DataFrame(self.env.crm_transactions) # type: ignore
+    def transactions_to_df(self, day1:datetime=datetime(2026, 1, 1)) -> pd.DataFrame:
+        """Convert transactions to a pandas DataFrame"""
+        if hasattr(self, 'transactions'):
+            df = pd.DataFrame(self.transactions)
+            d1 = day1 + timedelta(days= 7 - day1.weekday())  # Align to the first Monday
+            df['timestamp'] = df['timestamp'].apply(lambda x: d1 + timedelta(weeks=x))
+            return df.set_index('timestamp', drop=True).sort_index()
         else:
-            print("No CRM transactions found. Returning empty dataframe")
-            return pd.DataFrame(columns=['timestamp', 'initiator', 'recipient', 'message', 'type'])
+            return pd.DataFrame(columns=['timestamp', 'sender', 'receiver', 'intent', 'action', 'type'])
 
-    def get_account_stats(self):
-        """Get account statistics as a DataFrame."""
-        if hasattr(self.env, 'account_stats'):
-            df = pd.DataFrame(self.env.account_stats).set_index('timestamp', drop=False).sort_index() # type: ignore
-
-            d1 = datetime(year=2026, month=1, day=5, hour=0, minute=0, second=0)
-            week = timedelta(weeks=1)
-            df.index = df.loc[:, 'timestamp'].apply(lambda x: d1 + week * x) #type: ignore
-            df_monthly = df.resample('ME').last().drop(columns=['timestamp'])
-            return df_monthly
+    def account_stats_to_df(self, day1:datetime=datetime(2026, 1, 1), int_idx=False) -> pd.DataFrame:
+        """Convert account stats to a pandas DataFrame"""
+        if hasattr(self, 'account_stats'):
+            df = pd.DataFrame(self.account_stats)
+            if not int_idx:
+                d1 = day1 + timedelta(days= 7 - day1.weekday())  # Align to the first Monday
+                df['timestamp'] = df['timestamp'].apply(lambda x: d1 + timedelta(weeks=x))
+                df = df.set_index('timestamp', drop=True).sort_index()
+            return df
         else:
-            print("No account stats found. Returning empty dataframe")
-            return pd.DataFrame(columns=['LEAD', 'MQL', 'SQL', 'OPPORTUNITY', 'CLOSED_WON', 'CLOSED_LOST', 'STALE', 'nb_accounts'])
+            return pd.DataFrame(columns=['sender', 'receiver', 'intent', 'action', 'type'])
 
-    def plot_account_stats(self, as_share=True, hide_mql=True, hide_mql_sql=True):
-        """Plot account statistics."""
-        if hide_mql_sql:
-            df = self.get_account_stats().drop(columns=['LEAD', 'MQL', 'SQL', 'STALE', 'nb_accounts'])        
-        elif hide_mql:
-            df = self.get_account_stats().drop(columns=['LEAD','STALE', 'MQL', 'nb_accounts'])
-        else:
-            df = self.get_account_stats().drop(columns=['LEAD', 'STALE', 'nb_accounts'])
+    def accounts_per_stage(self, stage: AccountStage) -> List[Account]:
+        accounts = self.agents['account']
+        l = [a for a in  accounts if a.stage == stage] #type: ignore
+        return l #type:ignore
+    # =============================================================================
+    # Process related methods
+    # =============================================================================
+    def register_processes(self):
+        for p,kwargs in self.loprocesses:
+            self.env.process(p(**kwargs))
 
-        if as_share: 
-            df_pct = df.div(df.sum(axis=1), axis=0)  # Normalize to share
-        else:
-            df_pct = df.copy()
+    # =============================================================================
+    # Simulation related methods
+    # =============================================================================
+    def run(self, until: int):
+        """Run the simulation until a specified time
 
-        # Use month start for index for better bar alignment
-        df_pct.index = df_pct.index.to_period('M').to_timestamp('M')  # type: ignore
-
-        # Calculate bar width as number of days in each month
-        month_days = df_pct.index.days_in_month * 0.75  #type: ignore
-        bar_widths = pd.to_timedelta(month_days, unit='D')
-
-        # Prepare for stacking
-        x = df_pct.index
-        bottom = np.zeros(len(df_pct))
-        colors = sns.color_palette("tab10", n_colors=len(df_pct.columns))
-
-        plt.figure(figsize=(8,4))
-        for i, col in enumerate(df_pct.columns):
-            plt.bar(x, df_pct[col], width=bar_widths, bottom=bottom, label=col, color=colors[i])
-            bottom += df_pct[col].values #type: ignore
-
-        plt.xlabel("Timestamp")
-        plt.ylabel("Share of Total")
-        plt.title("Account Stages as Share of Total Over Time")
-        plt.legend(title="Stage", bbox_to_anchor=(1.05, 1), loc='upper left')
-        plt.tight_layout()
-        plt.show()
-
-    # Helper for simulation
-    def run(self, until=None):
+        Args:
+            until (int): The time until which the simulation should run
+        """
         self.env.run(until=until)
 
     def step(self):
-        """Run one step of the simulation."""
+        """Step the simulation until a specified time"""
         self.env.step()
 
-    def iterate(self):
-        self.env.run(until=self.env.peek() + 1)
+    def iterate(self) -> None:
+        """Perform one time step iteration"""
+        self.env.run(self.env.peek() + 1)
+
+    @staticmethod
+    def log(txt, agent, env):
+        # print(f"[{env.now:.2f}]-[{agent.name}] {txt}")
+        logthis(f"[{env.now:.2f}]-[{agent.name}] {txt}")
+
 
 
 if __name__ == "__main__":
     # Example usage
-    crm_simulator = CustomerRelationManagerSimulator(nb_salesreps=5, nb_mql_accounts=20, nb_sql_accounts=20)
-    crm_simulator.run(until=100)  # Run the simulation for 100 time units
-    crm_simulator.plot_account_stats(as_share=True)
-    print(crm_simulator.get_crm_transactions())
-    print(crm_simulator.convert_lists_to_df())
+    pass

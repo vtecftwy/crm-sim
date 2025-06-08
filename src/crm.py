@@ -7,6 +7,7 @@ import seaborn as sns
 import simpy
 
 from eccore.core import setup_logging, logthis
+from enum import Enum
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 from uuid import uuid4
@@ -37,10 +38,11 @@ class CustomerRelationManagerSimulator:
         self.setup_accounts(nb_mql, nb_sql, nb_others)
 
         
-        self.loprocesses = [] # List of all processes at the top level in the CRM
+        self.loprocesses = [
+            (self.new_mql_arrival, {'arrival_rate': 2 / 4}),  # MQL arrival process, 2 new MQL per month
+            ] # List of all processes at the top level in the CRM
         self.register_processes()
         self.env.process(self.record_accounts_stats())  # Positionel last to ensure it is the last action
-
 
     # =============================================================================
     # Methods to setup the simulation
@@ -137,6 +139,17 @@ class CustomerRelationManagerSimulator:
         """Adds this agent to the collection stored in crm"""
         self.agents.setdefault(category, []).append(agent)
 
+    def new_mql_arrival(self, arrival_rate):
+        """Exponential random variable giving the time to the next MQL arrival.
+
+        P[X>t] = exp(-arrival rate * t)
+        """
+        while True:
+            delay = random.expovariate(arrival_rate)
+            t = self.env.now + delay
+            yield self.env.timeout(delay)
+            self.add_account(stage=AccountStage.MQL)
+
     # =============================================================================
     # CRM reporting methods
     # =============================================================================
@@ -204,6 +217,18 @@ class CustomerRelationManagerSimulator:
         accounts = self.agents['account']
         l = [a for a in  accounts if a.stage == stage] #type: ignore
         return l #type:ignore
+
+    def account_df(self):
+        df = pd.DataFrame([a() for a in self.agents['account']])
+        for c in df.columns:
+            df.loc[:,c] = df.loc[:,c].apply(lambda x: x.name if isinstance(x, Enum) else x)
+        df.loc[:,'assigned_salesrep'] = df.loc[:,'assigned_salesrep'].apply(lambda x: x.uid)
+        return df
+
+    def salesrep_df(self):
+        df = pd.DataFrame([sr() for sr in self.agents['salesrep']])
+        return df
+        
     # =============================================================================
     # Process related methods
     # =============================================================================
@@ -229,6 +254,47 @@ class CustomerRelationManagerSimulator:
     def iterate(self) -> None:
         """Perform one time step iteration"""
         self.env.run(self.env.peek() + 1)
+
+    # =============================================================================
+    # Plotting and visualization methods
+    # =============================================================================
+    def plot_account_stats(self, as_share=True, hide_mql=True, hide_mql_sql=True):
+        """Plot account statistics."""
+        if hide_mql_sql:
+            df = self.account_stats_to_df().drop(columns=['LEAD', 'MQL', 'SQL', 'ACTIVE', 'nb_accounts'])        
+        elif hide_mql:
+            df = self.account_stats_to_df().drop(columns=['LEAD','ACTIVE', 'MQL', 'nb_accounts'])
+        else:
+            df = self.account_stats_to_df().drop(columns=['LEAD', 'ACTIVE', 'nb_accounts'])
+
+        if as_share: 
+            df_pct = df.div(df.sum(axis=1), axis=0)  # Normalize to share
+        else:
+            df_pct = df.copy()
+
+        # Use month start for index for better bar alignment
+        df_pct.index = df_pct.index.to_period('M').to_timestamp('M')  # type: ignore
+
+        # Calculate bar width as number of days in each month
+        month_days = df_pct.index.days_in_month * 0.75  #type: ignore
+        bar_widths = pd.to_timedelta(month_days, unit='D')
+
+        # Prepare for stacking
+        x = df_pct.index
+        bottom = np.zeros(len(df_pct))
+        colors = sns.color_palette("tab10", n_colors=len(df_pct.columns))
+
+        plt.figure(figsize=(8,4))
+        for i, col in enumerate(df_pct.columns):
+            plt.bar(x, df_pct[col], width=bar_widths, bottom=bottom, label=col, color=colors[i])
+            bottom += df_pct[col].values #type: ignore
+
+        plt.xlabel("Timestamp")
+        plt.ylabel("Share of Total")
+        plt.title("Account Stages as Share of Total Over Time")
+        plt.legend(title="Stage", bbox_to_anchor=(1.05, 1), loc='upper left')
+        plt.tight_layout()
+        plt.show()
 
     @staticmethod
     def log(txt, agent, env):

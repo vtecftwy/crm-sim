@@ -88,7 +88,7 @@ class BaseAgent(ABC):
         for p,kwargs in self.loprocesses:
             if kwargs: self.env.process(p(**kwargs))
             else: self.env.process(p())
-            print(f"{self.category} registered process: {p.__name__} with kwargs: {kwargs}")
+            # print(f"{self.category} registered process: {p.__name__} with kwargs: {kwargs}")
 
     def record_instance_creation(self):
         self.crm.record_transaction(
@@ -238,6 +238,7 @@ class MarketingDpt(BaseAgent):
         each process is defined as a tuple of (function, kwargs)
         """
         return [(self.send_email_campaign, {})]
+
 
 
 class SalesRep(BaseAgent):
@@ -474,6 +475,20 @@ class SalesRep(BaseAgent):
 
     @property
     def loprocesses(self) -> List[Tuple[Callable, Dict]]: return self._loprocesses 
+
+    def __repr__(self):
+        return f"SaleRep(name={self.name} uid={self.uid})"
+
+    def __call__(self) -> dict:
+        """Return a dictionary representation of the sales rep."""
+        # a2drop = ['crm', 'env', 'inbox', 'marketing','category', 'assigned_salesrep', 'sales_conversion_rates', 'mktg_conversion_rates', 'account_parameters', 'loprocesses',  'ops_conversion_delays', 'process_map', 'sales_conversion_delays', 'mktg_conversion_delays', 'ops_conversion_rates']
+        a2drop = ['crm', 'env', 'inbox', 'marketing','category','process_map', 'wkly_completion_handover', 'wkly_request_for_nego', 'wkly_request_for_presentation', 'loprocesses', 'assigned_accounts','wkly_review_needs', 'wkly_request_for_bid']
+        a2keep = []
+        attrs = [a for a in dir(self) if not a.startswith('_') and not callable(getattr(self, a))]
+        aoi = set(attrs).difference(set(a2drop)).union(set(a2keep))
+        # print(aoi)
+        return {a:getattr(self,a) for a in dir(self) if a in list(aoi)}
+
    
 
 class Account(BaseAgent):
@@ -628,7 +643,7 @@ class Account(BaseAgent):
                 msg={
                     'suid': self.crm.uid,
                     'ruid': self.uid,
-                    'intent': f"{fr} to {to}",
+                    'intent': f"{fr.name} to {to.name}",
                     'action': 'transition',
                 },
                 transaction_type='system',
@@ -648,6 +663,18 @@ class Account(BaseAgent):
             self.industry = getattr(Industry, self.industry, Industry.ConsumerGoods)
         self.account_type = kwargs.get("account_type", random.choice(list(AccountType)))
         self.lead_source = kwargs.get("lead_source", LeadSource.WEBSITE_CTA)
+
+    def __repr__(self):
+        return f"Account(name={self.name} uid={self.uid})"
+
+    def __call__(self) -> dict:
+        """Return a dictionary representation of the account."""
+        a2drop = ['crm', 'env', 'inbox', 'marketing','category', 'assigned_salesrep', 'sales_conversion_rates', 'mktg_conversion_rates', 'account_parameters', 'loprocesses',  'ops_conversion_delays', 'process_map', 'sales_conversion_delays', 'mktg_conversion_delays', 'ops_conversion_rates']
+        a2keep = ['assigned_salesrep']
+        attrs = [a for a in dir(self) if not a.startswith('_') and not callable(getattr(self, a))]
+        aoi = set(attrs).difference(set(a2drop)).union(set(a2keep))
+        return {a:getattr(self,a) for a in dir(self) if a in list(aoi)}
+
 
     @property
     def name(self) -> str: return self._name

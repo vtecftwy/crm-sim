@@ -108,6 +108,10 @@ class OpsIntents(Enum):
     """Enum for all possible intents from Operations to Accounts"""
     FEEDBACK_AT_COMPLETION = "feedback after project completion"
 
+class BusinessValues(Enum):
+    OPPORTUNITY = 'opportunity'
+    PURCHASE = 'purchase'
+
 class Actions(Enum):
     """Enum for all possible actions in the CRM"""
     REQUEST = 'request'
@@ -115,6 +119,8 @@ class Actions(Enum):
     REJECT = 'reject'
     POSITIVE = 'satisfied'
     NEGATIVE = 'unsatisfied'
+    FORECAST = 'opportunity forecast'
+    PURCHASE = 'purchase value'
 
 class InternalMessages(Enum):
     MQL2SQL = 'MQL to SQL conversion'

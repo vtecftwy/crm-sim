@@ -9,7 +9,7 @@ ROOT = Path(__file__).parent.parent.resolve()
 
 def account_info_generator(random_state=None):
     """Generate a unique account info."""
-    p2acct_info = ROOT / 'data/account-info.tsv'
+    p2acct_info = ROOT / 'data/account-info-clean.tsv'
     df = pd.read_csv(p2acct_info, sep='\t')
     df = df.sample(frac=1, random_state=random_state)  # Shuffle the DataFrame
     df = df.reset_index(drop=True)  # Reset index after shuffling   

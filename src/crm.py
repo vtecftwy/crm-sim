@@ -60,7 +60,7 @@ class CustomerRelationManagerSimulator:
     def setup_accounts(self, nb_mql, nb_sql, nb_others=15):
         """Initialize accounts."""
         nb_mql, nb_sql = int(nb_mql), int(nb_sql)
-        nb_prospects, nb_pitched, nb_bidded, nb_signed = int(nb_others),int(nb_others*.80),int(nb_others*.66),int(nb_others*.35)
+        nb_prospects, nb_pitched, nb_bidded, nb_signed = int(nb_others),int(nb_others*.70),int(nb_others*.60),int(nb_others*.35)
         if nb_mql > 0:
             for i,_ in enumerate(range(nb_mql)):
                 self.add_account(stage=AccountStage.MQL)
@@ -158,7 +158,7 @@ class CustomerRelationManagerSimulator:
         record = {
             'timestamp': self.env.now,
             'sender': msg['suid'],
-            'reviever': msg['ruid'],
+            'receiver': msg['ruid'],
             'intent': msg['intent'],
             'action': msg.get('action', None),
             'type': transaction_type,

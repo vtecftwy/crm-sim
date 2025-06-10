@@ -290,8 +290,9 @@ class CustomerRelationManagerSimulator:
             bottom += df_pct[col].values #type: ignore
 
         plt.xlabel("Timestamp")
-        plt.ylabel("Share of Total")
-        plt.title("Account Stages as Share of Total Over Time")
+        plt.ylabel(f"{'Share of Total' if as_share else 'Number Accounts'}")
+        title = f"Account per Stages {'as Share of Total' if as_share else 'in Numbers'} Over Time"
+        plt.title(title)
         plt.legend(title="Stage", bbox_to_anchor=(1.05, 1), loc='upper left')
         plt.tight_layout()
         plt.show()

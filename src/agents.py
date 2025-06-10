@@ -594,11 +594,44 @@ class Account(BaseAgent):
         else:
             yield self.env.timeout(0)
 
+    def conversion_rate_factor(self, msg):
+        factor_country = {
+            Country.EU: 1,
+            Country.US: 0.75,
+            Country.CN: 0.66,
+        }
+        factor_industry = {
+            Industry.FoodnBeverage: 1,
+            Industry.ConsumerGoods: 1,
+            Industry.Chemicals: 0.75,
+            Industry.Pharmaceuticals: 0.75
+        }
+        factor_type = {
+            AccountType.SMALL: 0.50,
+            AccountType.MEDIUM: 1.0,
+            AccountType.LARGE: 1.0
+        }
+
+        if msg['intent'] == SalesIntents.USER_NEED.value:
+            return factor_country.get(self.country, 1)
+        elif msg['intent'] == SalesIntents.PRESENTATION.value:
+            return factor_country.get(self.country, 1)
+        elif msg['intent'] == SalesIntents.BID.value:
+            return  factor_industry.get(self.industry, 1)
+        elif msg['intent'] == SalesIntents.NEGO.value:
+            return  factor_type.get(self.account_type,1)
+        elif msg['intent'] == OpsIntents.FEEDBACK_AT_COMPLETION.value:
+            return  factor_country.get(self.country, 1)
+        else:
+            return 1
+
     def reply_to_salesrep_request(self, msg):
         self.log(f"Received sales rep request: {msg}")
         if msg['action'] == Actions.REQUEST.value:
             convrate = self.sales_conversion_rates.get(msg['intent'], 0)
-            # self.log(f"{convrate}")
+            factor =  self.conversion_rate_factor(msg)
+            self.log(f"{convrate} {factor}")
+            convrate = min(convrate * factor, 1)
             if random.random() <= convrate:
                 reply_msg = {'suid': self.uid, 'ruid': msg['suid'], 'intent': msg['intent'], 'action': Actions.ACCEPT.value}
                 if msg['intent'] in [SalesIntents.BID.value, SalesIntents.NEGO.value]:

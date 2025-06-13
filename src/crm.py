@@ -18,31 +18,45 @@ from enums import AccountStatus, AccountType, AccountStage, Country, Industry, L
 from enums import MktgIntents, SalesIntents, Actions
 from utils import salesrep_name_generator, account_info_generator
 
+# TODO: structure not clean. See crm-todo.md file for further explanations
 
 class CustomerRelationManagerSimulator:
+    """Singleton Class to represent the CRM, orchestrating all action of the crm simulation"""
 
-    def __init__(self,nb_salesreps=5, nb_mql=20, nb_sql=20, nb_others=15):
+    _instance = None
+    
+
+    def __init__(self):
+        if CustomerRelationManagerSimulator._instance is not None:
+            raise Exception("This is a singleton class. Use get_instance() method to call it.")    
+        self._instance = self
         self.name = 'CRMSim'
         self.uid = 'crm-' + str(uuid4())
         self.env = simpy.Environment()
         self.time_step_unit = 'Week'
         self.agents:Dict[str, List[Account|SalesRep|MarketingDpt]] = {} # List of Agents, dict with key as agent types and value as lists
         self.requests_in_progress = [] # queue where accounts with pending request are stored
-
         self.transactions = []
 
+    def populate(self,nb_salesreps=5, nb_mql=20, nb_sql=20, nb_others=15):
         self.marketing = MarketingDpt(self)
         self.salesrep_name_gen = salesrep_name_generator() # initialise salesrep name generator
         self.setup_salesreps(nb_salesreps)
         self.account_info_gen = account_info_generator()
         self.setup_accounts(nb_mql, nb_sql, nb_others)
-
-        
         self.loprocesses = [
             (self.new_mql_arrival, {'arrival_rate': 2 / 4}),  # MQL arrival process, 2 new MQL per month
             ] # List of all processes at the top level in the CRM
         self.register_processes()
         self.env.process(self.record_accounts_stats())  # Positionel last to ensure it is the last action
+        pass
+
+    @staticmethod
+    def get_instance():
+        """Get the existing singleton instance of the CRM simulator."""
+        if CustomerRelationManagerSimulator._instance is None:
+            raise Exception("CRM Simulator not initialized. Create an instance first.")
+        return CustomerRelationManagerSimulator._instance
 
     # =============================================================================
     # Methods to setup the simulation

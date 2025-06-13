@@ -1,31 +1,29 @@
+import contextvars
+import itertools
 import json
-import simpy
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 import random
-
+import seaborn as sns   
+import simpy
 
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
+from eccore.core import setup_logging, logthis
+from enum import Enum
 from functools import partial
-from typing import Any, Callable, Dict, List, Sequence, Tuple
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from uuid import uuid4
 
 from enum import Enum, auto
-from enums import AccountStage, AccountType, Industry, Country, LeadSource
-from enums import MktgIntents, SalesIntents, OpsIntents, Actions, BusinessValues, InternalMessages
+from enums import AccountStage, AccountType, OpportunityStage, Industry, Country, LeadSource
+from enums import MktgIntents, SalesIntents, OpsIntents, Actions, OpportunityValues, InternalMessages
+from local_context import crm_context
+from utils import draw_value_beta
+from utils import salesrep_name_generator, account_info_generator
 
-# Global parameters (can be tweaked)
-LEAD_CONVERSION_RATES = {
-    'inbound_mktg_event': 0.3,          # CTA on website, blogs, social media, webinars
-    'outbound_mktg_event': 0.2,         # Email campaigns, ads, industry events, ...
-    'inbound_sales_event': 0.2,         # CTA on website leading to a specific request for pricing
-    'outbound_sales_event': 0.15,       # Cold calls
-}
-DELAY_RANGES = {
-    'inbound_mktg_event': (2, 5),
-    'outbound_mktg_event': (2, 5),
-    'inbound_sales_event': (3, 5),
-    'outbound_sales_event': (3, 5),
-}
 
 class BaseAgent(ABC):
     """Base Agent class, used to create any other agent in the CRM simulation
@@ -38,8 +36,12 @@ class BaseAgent(ABC):
 
     _category = "baseagent" 
     
-    def __init__(self, crm):
-        self.crm = crm
+    def __init__(self):
+        crm = crm_context.get()
+        if crm is None:
+            raise RuntimeError("CRM instance not found. Make sure to initialize the CRM before creating agents.")
+        else:
+            self.crm = crm
         # Define aliases for convenience
         self.env = self.crm.env
 
@@ -77,7 +79,6 @@ class BaseAgent(ABC):
                 self.log(f"Handling intent: {intent} with process {fn.__name__} {fn} and {msg}")
                 yield from fn(msg)
 
-
     def no_action(self, msg):
         # print(f"No_action called on {self.name}")
         yield self.env.timeout(0)
@@ -100,7 +101,7 @@ class BaseAgent(ABC):
             },
             transaction_type='system',
         )
-    
+
     @property
     def category(self):
         if self._category == "baseagent":
@@ -147,7 +148,7 @@ class MarketingDpt(BaseAgent):
 
     _category = 'marketing'
     
-    def __init__(self, crm):
+    def __init__(self):
         """Initialize the Marketing Department Agent"""
         self._name:str = 'Marketing Dpt'
         self._uid:str = 'mktg-' + str(uuid4())
@@ -170,8 +171,7 @@ class MarketingDpt(BaseAgent):
                 'nb_yearly_events': 12,
             }
         }
-
-        super().__init__(crm)
+        super().__init__()
 
     # Processes
     def process_email_campaign_replies(self, msg):
@@ -239,12 +239,19 @@ class MarketingDpt(BaseAgent):
         """
         return [(self.send_email_campaign, {})]
 
+    def __repr__(self) -> str: return f"<MarketingDpt(name={self.name}, uid={self.uid})>"
+
+    def __call__(self) -> Dict[str, Any]:
+        """Return a dictionary representation of the marketing department."""
+        aoi = ['name', 'uid']
+        return {a:getattr(self,a) for a in dir(self) if a in list(aoi)}
+
 
 class SalesRep(BaseAgent):
 
     _category = 'salesrep'
 
-    def __init__(self, crm, name):
+    def __init__(self, name):
         self._name = name
         self._uid = 'srep-' + str(uuid4())
         self.assigned_accounts = []
@@ -264,7 +271,7 @@ class SalesRep(BaseAgent):
             (self.request_negotiation, None),
             (self.request_project_feedback, None),
         ]
-        super().__init__(crm)
+        super().__init__()
 
         self.wkly_review_needs = 2
         self.wkly_request_for_presentation = 2
@@ -525,7 +532,6 @@ class Account(BaseAgent):
     ops_conversion_delays = {
         OpsIntents.FEEDBACK_AT_COMPLETION.value: 4 * 2, # 2 months for implementation
     }
-
     opportunity_sizes = {
         AccountType.SMALL: (10_000,50_000),
         AccountType.MEDIUM: (50_000,250_000),
@@ -533,7 +539,7 @@ class Account(BaseAgent):
     }
     
 
-    def __init__(self, crm, name, marketing, **kwargs):
+    def __init__(self, name, marketing, **kwargs):
         """Initialize the Account Agent"""
         self._name = name
         self._uid = f"acct-{uuid4()}"
@@ -560,7 +566,7 @@ class Account(BaseAgent):
             OpsIntents.FEEDBACK_AT_COMPLETION.value: self.reply_to_ops_request,
         }
 
-        super().__init__(crm)
+        super().__init__()
 
     def reply_to_email_campaign(self, msg):
         """Reply with an 'accept' or 'deny' action to the email campaign message"""
@@ -712,8 +718,8 @@ class Account(BaseAgent):
                 self.crm.record_transaction(
                     msg={
                         'suid': self.uid,
-                        'ruid': self.assigned_salesrep.uid,
-                        'intent': BusinessValues.OPPORTUNITY.value,
+                        'ruid': self.assigned_salesrep.uid if self.assigned_salesrep else '-',
+                        'intent': OpportunityStage.OPPORTUNITY.value,
                         'action': Actions.FORECAST.value
                     },
                     transaction_type='external',
@@ -727,8 +733,8 @@ class Account(BaseAgent):
                 self.crm.record_transaction(
                     msg={
                         'suid': self.uid,
-                        'ruid': self.assigned_salesrep.uid,
-                        'intent': BusinessValues.PURCHASE.value,
+                        'ruid': self.assigned_salesrep.uid if self.assigned_salesrep else '-',
+                        'intent': OpportunityStage.PURCHASE.value,
                         'action': Actions.PURCHASE.value
                     },
                     transaction_type='external',
@@ -773,6 +779,33 @@ class Account(BaseAgent):
     def process_map(self): return self._process_map
 
 
+class Opportunity():
+
+    def __init__(self, name, account, creation_time):
+        self.name = name       # Structured as Account Name | Opportunity Nbr
+        self.creation_time = creation_time
+        self.uid = 'opp-' + str(uuid4())
+        self.account = account
+        self.set_value()
+        self.stage = OpportunityStage.IDENTIFIED
+
+    def set_value(self) -> None:
+        account_type = self.account.accout_type.name
+        value = int(draw_value_beta(*OpportunityValues[account_type].value)/100) * 100
+        self.value = int(value)
+
+    def __repr__(self):
+        return f"Opportunity(name={self.name}, value: {self.value:,d}, uid={self.uid})"
+
+    def __call__(self) -> dict:
+        """Return a dictionary representation of the opportunity."""
+        a2drop = []
+        a2keep = []
+        attrs = [a for a in dir(self) if not a.startswith('_') and not callable(getattr(self, a))]
+        aoi = set(attrs).difference(set(a2drop)).union(set(a2keep))
+        # print(aoi)
+        return {a:getattr(self,a) for a in dir(self) if a in list(aoi)}
+
 
 def accounts_created_before(t, env):
     return [acc for acc in env.accounts if acc.created_at <= t]
@@ -785,13 +818,6 @@ def report_account_stages(env):
 
 # ... Account class and other functions ...
 
-def periodic_reporter(env, interval):
-    # First report at time 1
-    yield env.timeout(1)
-    report_account_stages(env)
-    while True:
-        yield env.timeout(interval)
-        report_account_stages(env)
 
 if __name__ == "__main__":
-    pass
+    print('OK')

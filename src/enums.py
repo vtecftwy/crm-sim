@@ -22,24 +22,26 @@ class AccountStage(Enum):
     ACTIVE = auto()
     STALE = auto()
 
-class OpportunityStage(Enum):
-    """
-    Enum representing the stage of an opportunity in the sales process.
-    """
-    IDENTIFIED = auto()
-    PITCHED = auto()
-    BIDDED = auto()
-    CLOSED_WON = auto()
-    CLOSED_LOST = auto()
-    CLOSED_STALE = auto()
-
 class AccountStatus(Enum):
+    # TODO: confirm whether this is needed
     LEAD = auto()
     PROSPECT = auto()
     OPPORTUNITY = auto()
     ACTIVE = auto()
     STALE = auto()
-    
+
+class OpportunityStage(Enum):
+    """
+    Enum representing the stage of an opportunity in the sales process.
+    """
+    IDENTIFIED = auto()     # Corresponds to PROSPECT account stage
+    PITCHED = auto()        # Corresponds to PITCHED account stage
+    BIDDED = auto()         # Corresponds to BIDDED account stage    
+    CLOSED_WON = auto()     # Corresponds to SIGNED account stage
+    CLOSED_LOST = auto()    # Corresponds to SIGNED account stage
+    OPPORTUNITY = 'opportunity'
+    PURCHASE = 'purchase'
+
 class AccountType(Enum):
     """
     Enum representing the type of account.
@@ -108,10 +110,6 @@ class OpsIntents(Enum):
     """Enum for all possible intents from Operations to Accounts"""
     FEEDBACK_AT_COMPLETION = "feedback after project completion"
 
-class BusinessValues(Enum):
-    OPPORTUNITY = 'opportunity'
-    PURCHASE = 'purchase'
-
 class Actions(Enum):
     """Enum for all possible actions in the CRM"""
     REQUEST = 'request'
@@ -134,3 +132,8 @@ class InternalMessages(Enum):
     BIDDED2SQL = 'Back to SQL, bid lost'
     SIGNED2ACTIVE = 'SIGNED to SATISFIED'
     SIGNED2STALE = 'SIGNED to UNSATISFIED'
+
+class OpportunityValues(Enum):
+    SMALL =  (10_000,50_000)
+    MEDIUM = (50_000,250_000)
+    LARGE= (250_000,1_000_000)
